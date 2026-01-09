@@ -2,21 +2,51 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{error, info};
 
+pub mod cli;
+pub mod config;
 pub mod handler;
 pub mod resp;
 pub mod storage;
+pub mod storage_backends;
 
+use cli::Cli;
+use config::{Config, StorageConfig};
 use handler::Handler;
-use storage::Storage;
+use storage_backends::StorageFactory;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    // Parse command line arguments
+    let cli = Cli::parse();
 
-    let listener = TcpListener::bind("127.0.0.1:6379").await?;
-    let storage = Arc::new(Storage::new());
+    // Initialize logging based on CLI flags
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(if cli.debug {
+            tracing::Level::DEBUG
+        } else if cli.verbose {
+            tracing::Level::INFO
+        } else {
+            tracing::Level::WARN
+        });
+    subscriber.init();
 
-    info!("Redis server listening on 127.0.0.1:6379");
+    // Validate CLI arguments
+    if let Err(e) = cli.validate() {
+        eprintln!("Configuration error: {}", e);
+        std::process::exit(1);
+    }
+
+    // Create configuration from CLI args (with file and env fallbacks)
+    let config = Config::from_sources(&cli)?;
+    let bind_addr = format!("{}:{}", config.server.host, config.server.port);
+    
+    info!("Starting Coral Redis Server v{}", env!("CARGO_PKG_VERSION"));
+    info!("Storage backend: {}", cli.storage);
+    info!("Initializing storage backend: {:?}", config.storage);
+    let storage = create_storage_backend(&config.storage).await?;
+    
+    let listener = TcpListener::bind(&bind_addr).await?;
+    info!("Redis server listening on {}", bind_addr);
 
     loop {
         let (socket, addr) = listener.accept().await?;
@@ -31,9 +61,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
+async fn create_storage_backend(config: &StorageConfig) -> Result<Arc<dyn storage_backends::StorageBackend>, Box<dyn std::error::Error>> {
+    match config {
+        StorageConfig::Memory => {
+            info!("Using memory storage backend");
+            Ok(Arc::from(StorageFactory::create_memory().await))
+        },
+        #[cfg(feature = "lmdb-backend")]
+        StorageConfig::Lmdb { path } => {
+            info!("Using LMDB storage backend at path: {:?}", path);
+            Ok(Arc::from(StorageFactory::create_lmdb(path).await?))
+        },
+        #[cfg(feature = "s3-backend")]
+        StorageConfig::S3 { bucket, prefix, .. } => {
+            info!("Using S3 storage backend with bucket: {}", bucket);
+            Ok(Arc::from(StorageFactory::create_s3(bucket.clone(), prefix.clone()).await?))
+        },
+    }
+}
+
 async fn handle_connection(
     mut socket: TcpStream,
-    storage: Arc<Storage>,
+    storage: Arc<dyn storage_backends::StorageBackend>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let handler = Handler::new(storage);
     handler.handle_stream(&mut socket).await

@@ -1,0 +1,164 @@
+use clap::{Parser, ValueEnum};
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(name = "coral-redis")]
+#[command(about = "A Redis-compatible server implemented in Rust")]
+#[command(long_about = "Coral Redis is a high-performance Redis-compatible server with pluggable storage backends")]
+#[command(version)]
+pub struct Cli {
+    /// Server host to bind to
+    #[arg(short = 'H', long, default_value = "127.0.0.1")]
+    pub host: String,
+
+    /// Server port to bind to
+    #[arg(short, long, default_value = "6379")]
+    pub port: u16,
+
+    /// Storage backend to use
+    #[arg(short, long, default_value = "memory")]
+    pub storage: StorageBackend,
+
+    /// Path for LMDB storage (required when using LMDB backend)
+    #[arg(long, required_if_eq("storage", "lmdb"))]
+    pub lmdb_path: Option<PathBuf>,
+
+    /// S3 bucket name (required when using S3 backend)
+    #[arg(long, required_if_eq("storage", "s3"))]
+    pub s3_bucket: Option<String>,
+
+    /// S3 key prefix (optional when using S3 backend)
+    #[arg(long)]
+    pub s3_prefix: Option<String>,
+
+    /// AWS region (optional, uses default AWS config if not specified)
+    #[arg(long)]
+    pub aws_region: Option<String>,
+
+    /// Configuration file path (JSON format)
+    #[arg(short, long)]
+    pub config: Option<PathBuf>,
+
+    /// Enable verbose logging
+    #[arg(short, long)]
+    pub verbose: bool,
+
+    /// Enable debug logging
+    #[arg(short, long)]
+    pub debug: bool,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum StorageBackend {
+    /// In-memory storage (default, fast but not persistent)
+    Memory,
+    /// LMDB storage (persistent, ACID transactions)
+    #[cfg(feature = "lmdb-backend")]
+    Lmdb,
+    /// AWS S3 storage (cloud-based, highly scalable)
+    #[cfg(feature = "s3-backend")]
+    S3,
+}
+
+impl std::fmt::Display for StorageBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StorageBackend::Memory => write!(f, "memory"),
+            #[cfg(feature = "lmdb-backend")]
+            StorageBackend::Lmdb => write!(f, "lmdb"),
+            #[cfg(feature = "s3-backend")]
+            StorageBackend::S3 => write!(f, "s3"),
+        }
+    }
+}
+
+impl Cli {
+    /// Parse command line arguments
+    pub fn parse() -> Self {
+        <Self as Parser>::parse()
+    }
+
+    /// Validate the configuration
+    pub fn validate(&self) -> Result<(), String> {
+        match self.storage {
+            #[cfg(feature = "lmdb-backend")]
+            StorageBackend::Lmdb => {
+                if self.lmdb_path.is_none() {
+                    return Err("LMDB path is required when using LMDB backend".to_string());
+                }
+            }
+            #[cfg(feature = "s3-backend")]
+            StorageBackend::S3 => {
+                if self.s3_bucket.is_none() {
+                    return Err("S3 bucket is required when using S3 backend".to_string());
+                }
+            }
+            StorageBackend::Memory => {
+                // Memory backend needs no additional configuration
+            }
+        }
+        Ok(())
+    }
+
+    /// Convert CLI args to configuration
+    pub fn to_config(&self) -> crate::config::Config {
+        use crate::config::{Config, ServerConfig, StorageConfig};
+
+        let server_config = ServerConfig {
+            host: self.host.clone(),
+            port: self.port,
+        };
+
+        let storage_config = match self.storage {
+            StorageBackend::Memory => StorageConfig::Memory,
+            #[cfg(feature = "lmdb-backend")]
+            StorageBackend::Lmdb => StorageConfig::Lmdb {
+                path: self.lmdb_path.clone().expect("LMDB path should be validated"),
+            },
+            #[cfg(feature = "s3-backend")]
+            StorageBackend::S3 => StorageConfig::S3 {
+                bucket: self.s3_bucket.clone().expect("S3 bucket should be validated"),
+                prefix: self.s3_prefix.clone(),
+                region: self.aws_region.clone(),
+            },
+        };
+
+        Config {
+            server: server_config,
+            storage: storage_config,
+        }
+    }
+
+    /// Print example usage for different backends
+    pub fn print_examples() {
+        println!("Examples:");
+        println!("  # Start with memory backend (default)");
+        println!("  {} --storage memory", env!("CARGO_PKG_NAME"));
+        println!();
+        
+        #[cfg(feature = "lmdb-backend")]
+        {
+            println!("  # Start with LMDB backend");
+            println!("  {} --storage lmdb --lmdb-path ./data.lmdb", env!("CARGO_PKG_NAME"));
+            println!();
+        }
+        
+        #[cfg(feature = "s3-backend")]
+        {
+            println!("  # Start with S3 backend");
+            println!("  {} --storage s3 --s3-bucket my-bucket --s3-prefix redis/", env!("CARGO_PKG_NAME"));
+            println!();
+        }
+        
+        println!("  # Custom host and port");
+        println!("  {} --host 0.0.0.0 --port 6380", env!("CARGO_PKG_NAME"));
+        println!();
+        
+        println!("  # Load from config file");
+        println!("  {} --config config.json", env!("CARGO_PKG_NAME"));
+        println!();
+        
+        println!("  # Verbose logging");
+        println!("  {} --verbose", env!("CARGO_PKG_NAME"));
+    }
+}

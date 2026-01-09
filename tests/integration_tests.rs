@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use coral_redis::handler::Handler;
-use coral_redis::storage::Storage;
+use coral_redis::storage_backends::memory::MemoryStorage;
 
 #[tokio::test]
 async fn test_server_integration_basic_commands() {
     // Start server in background
-    let storage = Arc::new(Storage::new());
+    let storage: Arc<dyn coral_redis::StorageBackend> = Arc::new(MemoryStorage::new());
     let handler = Handler::new(storage);
     
     // This is a simplified integration test focusing on the handler logic
@@ -54,7 +54,7 @@ async fn test_server_integration_basic_commands() {
 
 #[tokio::test]
 async fn test_multiple_clients() {
-    let storage = Arc::new(Storage::new());
+    let storage: Arc<dyn coral_redis::StorageBackend> = Arc::new(MemoryStorage::new());
     
     // Simulate multiple clients accessing the same storage
     let handler1 = Handler::new(Arc::clone(&storage));
@@ -85,7 +85,7 @@ async fn test_multiple_clients() {
 
 #[tokio::test]
 async fn test_error_handling() {
-    let storage = Arc::new(Storage::new());
+    let storage: Arc<dyn coral_redis::StorageBackend> = Arc::new(MemoryStorage::new());
     let handler = Handler::new(storage);
     
     // Test invalid command

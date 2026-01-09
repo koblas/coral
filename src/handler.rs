@@ -1,5 +1,5 @@
 use crate::resp::{RespParser, RespValue};
-use crate::storage::Storage;
+use crate::storage_backends::StorageBackend;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -7,11 +7,11 @@ use tokio::net::TcpStream;
 use tracing::{debug, warn};
 
 pub struct Handler {
-    storage: Arc<Storage>,
+    storage: Arc<dyn StorageBackend>,
 }
 
 impl Handler {
-    pub fn new(storage: Arc<Storage>) -> Self {
+    pub fn new(storage: Arc<dyn StorageBackend>) -> Self {
         Self { storage }
     }
 
@@ -101,9 +101,12 @@ impl Handler {
             {
                 if option.to_uppercase() == "EX" {
                     if let Ok(ttl_secs) = ttl_str.parse::<u64>() {
-                        self.storage
-                            .set_with_expiry(key, value, Duration::from_secs(ttl_secs));
-                        return RespValue::SimpleString("OK".to_string());
+                        match self.storage
+                            .set_with_expiry(key, value, Duration::from_secs(ttl_secs)).await
+                        {
+                            Ok(()) => return RespValue::SimpleString("OK".to_string()),
+                            Err(_) => return RespValue::Error("SET failed".to_string()),
+                        }
                     } else {
                         return RespValue::Error("Invalid TTL".to_string());
                     }
@@ -111,8 +114,10 @@ impl Handler {
             }
         }
 
-        self.storage.set(key, value);
-        RespValue::SimpleString("OK".to_string())
+        match self.storage.set(key, value).await {
+            Ok(()) => RespValue::SimpleString("OK".to_string()),
+            Err(_) => RespValue::Error("SET failed".to_string()),
+        }
     }
 
     async fn handle_get(&self, args: &[RespValue]) -> RespValue {
@@ -125,9 +130,10 @@ impl Handler {
             _ => return RespValue::Error("Invalid key".to_string()),
         };
 
-        match self.storage.get(key) {
-            Some(value) => RespValue::BulkString(Some(value)),
-            None => RespValue::BulkString(None),
+        match self.storage.get(key).await {
+            Ok(Some(value)) => RespValue::BulkString(Some(value)),
+            Ok(None) => RespValue::BulkString(None),
+            Err(_) => RespValue::Error("GET failed".to_string()),
         }
     }
 
@@ -146,8 +152,12 @@ impl Handler {
                 }
             };
 
-            if self.storage.delete(key) {
-                deleted_count += 1;
+            match self.storage.delete(key).await {
+                Ok(true) => deleted_count += 1,
+                Ok(false) => {},
+                Err(_) => {
+                    warn!("Failed to delete key: {}", key);
+                }
             }
         }
 
@@ -169,8 +179,12 @@ impl Handler {
                 }
             };
 
-            if self.storage.exists(key) {
-                exists_count += 1;
+            match self.storage.exists(key).await {
+                Ok(true) => exists_count += 1,
+                Ok(false) => {},
+                Err(_) => {
+                    warn!("Failed to check existence of key: {}", key);
+                }
             }
         }
 
@@ -178,12 +192,17 @@ impl Handler {
     }
 
     async fn handle_dbsize(&self) -> RespValue {
-        RespValue::Integer(self.storage.keys_count() as i64)
+        match self.storage.keys_count().await {
+            Ok(count) => RespValue::Integer(count as i64),
+            Err(_) => RespValue::Error("DBSIZE failed".to_string()),
+        }
     }
 
     async fn handle_flushdb(&self) -> RespValue {
-        self.storage.flush();
-        RespValue::SimpleString("OK".to_string())
+        match self.storage.flush().await {
+            Ok(()) => RespValue::SimpleString("OK".to_string()),
+            Err(_) => RespValue::Error("FLUSHDB failed".to_string()),
+        }
     }
 
     async fn handle_command_info(&self) -> RespValue {
@@ -195,11 +214,11 @@ impl Handler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resp::RespValue;
+    use crate::storage_backends::memory::MemoryStorage;
     use std::sync::Arc;
 
     fn create_handler() -> Handler {
-        let storage = Arc::new(Storage::new());
+        let storage: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
         Handler::new(storage)
     }
 
