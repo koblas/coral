@@ -1,3 +1,4 @@
+use crate::metrics::{Metrics, Timer};
 use crate::protocol::{RespParser, RespValue};
 use crate::storage::StorageBackend;
 use std::sync::Arc;
@@ -19,6 +20,9 @@ impl Handler {
         &self,
         stream: &mut TcpStream,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let metrics = Metrics::get();
+        metrics.increment_connections();
+        
         let mut parser = RespParser::new();
         let mut buffer = [0; 1024];
 
@@ -32,7 +36,13 @@ impl Handler {
 
             while let Some(value) = parser.parse()? {
                 debug!("Received command: {:?}", value);
+                
+                let timer = Timer::new();
                 let response = self.handle_command(value).await;
+                let duration = timer.elapsed_seconds();
+                
+                metrics.record_request(duration);
+                
                 let response_bytes = response.to_bytes();
                 stream.write_all(&response_bytes).await?;
                 stream.flush().await?;
@@ -43,14 +53,20 @@ impl Handler {
     }
 
     pub async fn handle_command(&self, value: RespValue) -> RespValue {
+        let metrics = Metrics::get();
+        
         match value {
             RespValue::Array(Some(parts)) if !parts.is_empty() => {
                 let command = match &parts[0] {
                     RespValue::BulkString(Some(cmd)) => cmd.to_uppercase(),
-                    _ => return RespValue::Error("Invalid command format".to_string()),
+                    _ => {
+                        metrics.record_error("invalid_command_format", None);
+                        return RespValue::Error("Invalid command format".to_string());
+                    }
                 };
 
-                match command.as_str() {
+                let timer = Timer::new();
+                let response = match command.as_str() {
                     "PING" => self.handle_ping(&parts[1..]).await,
                     "SET" => self.handle_set(&parts[1..]).await,
                     "GET" => self.handle_get(&parts[1..]).await,
@@ -59,10 +75,21 @@ impl Handler {
                     "DBSIZE" => self.handle_dbsize().await,
                     "FLUSHDB" => self.handle_flushdb().await,
                     "COMMAND" => self.handle_command_info().await,
-                    _ => RespValue::Error(format!("Unknown command: {}", command)),
-                }
+                    _ => {
+                        metrics.record_error("unknown_command", Some(&command));
+                        RespValue::Error(format!("Unknown command: {}", command))
+                    }
+                };
+                
+                let duration = timer.elapsed_seconds();
+                metrics.record_command(&command, duration);
+                
+                response
             }
-            _ => RespValue::Error("Invalid command format".to_string()),
+            _ => {
+                metrics.record_error("invalid_command_format", None);
+                RespValue::Error("Invalid command format".to_string())
+            }
         }
     }
 
@@ -80,6 +107,8 @@ impl Handler {
     }
 
     async fn handle_set(&self, args: &[RespValue]) -> RespValue {
+        let metrics = Metrics::get();
+        
         if args.len() < 2 {
             return RespValue::Error("Wrong number of arguments for SET".to_string());
         }
@@ -101,11 +130,21 @@ impl Handler {
             {
                 if option.to_uppercase() == "EX" {
                     if let Ok(ttl_secs) = ttl_str.parse::<u64>() {
-                        match self.storage
-                            .set_with_expiry(key, value, Duration::from_secs(ttl_secs)).await
-                        {
-                            Ok(()) => return RespValue::SimpleString("OK".to_string()),
-                            Err(_) => return RespValue::Error("SET failed".to_string()),
+                        let timer = Timer::new();
+                        let result = self.storage
+                            .set_with_expiry(key.clone(), value, Duration::from_secs(ttl_secs)).await;
+                        let duration = timer.elapsed_seconds();
+                        
+                        match result {
+                            Ok(()) => {
+                                metrics.record_storage_operation("set_with_expiry", "storage", duration);
+                                metrics.record_key_operation("set", 1);
+                                return RespValue::SimpleString("OK".to_string());
+                            }
+                            Err(_e) => {
+                                metrics.record_storage_error("set_with_expiry", "storage", "operation_failed");
+                                return RespValue::Error("SET failed".to_string());
+                            }
                         }
                     } else {
                         return RespValue::Error("Invalid TTL".to_string());
@@ -114,13 +153,26 @@ impl Handler {
             }
         }
 
-        match self.storage.set(key, value).await {
-            Ok(()) => RespValue::SimpleString("OK".to_string()),
-            Err(_) => RespValue::Error("SET failed".to_string()),
+        let timer = Timer::new();
+        let result = self.storage.set(key.clone(), value).await;
+        let duration = timer.elapsed_seconds();
+        
+        match result {
+            Ok(()) => {
+                metrics.record_storage_operation("set", "storage", duration);
+                metrics.record_key_operation("set", 1);
+                RespValue::SimpleString("OK".to_string())
+            }
+            Err(_) => {
+                metrics.record_storage_error("set", "storage", "operation_failed");
+                RespValue::Error("SET failed".to_string())
+            }
         }
     }
 
     async fn handle_get(&self, args: &[RespValue]) -> RespValue {
+        let metrics = Metrics::get();
+        
         if args.len() != 1 {
             return RespValue::Error("Wrong number of arguments for GET".to_string());
         }
@@ -130,14 +182,29 @@ impl Handler {
             _ => return RespValue::Error("Invalid key".to_string()),
         };
 
-        match self.storage.get(key).await {
-            Ok(Some(value)) => RespValue::BulkString(Some(value)),
-            Ok(None) => RespValue::BulkString(None),
-            Err(_) => RespValue::Error("GET failed".to_string()),
+        let timer = Timer::new();
+        let result = self.storage.get(key).await;
+        let duration = timer.elapsed_seconds();
+        
+        match result {
+            Ok(Some(value)) => {
+                metrics.record_storage_operation("get", "storage", duration);
+                RespValue::BulkString(Some(value))
+            }
+            Ok(None) => {
+                metrics.record_storage_operation("get", "storage", duration);
+                RespValue::BulkString(None)
+            }
+            Err(_) => {
+                metrics.record_storage_error("get", "storage", "operation_failed");
+                RespValue::Error("GET failed".to_string())
+            }
         }
     }
 
     async fn handle_del(&self, args: &[RespValue]) -> RespValue {
+        let metrics = Metrics::get();
+        
         if args.is_empty() {
             return RespValue::Error("Wrong number of arguments for DEL".to_string());
         }
@@ -152,10 +219,21 @@ impl Handler {
                 }
             };
 
-            match self.storage.delete(key).await {
-                Ok(true) => deleted_count += 1,
-                Ok(false) => {},
+            let timer = Timer::new();
+            let result = self.storage.delete(key).await;
+            let duration = timer.elapsed_seconds();
+            
+            match result {
+                Ok(true) => {
+                    metrics.record_storage_operation("delete", "storage", duration);
+                    deleted_count += 1;
+                }
+                Ok(false) => {
+                    metrics.record_storage_operation("delete", "storage", duration);
+                    // Key didn't exist, not an error
+                }
                 Err(_) => {
+                    metrics.record_storage_error("delete", "storage", "operation_failed");
                     warn!("Failed to delete key: {}", key);
                 }
             }

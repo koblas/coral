@@ -4,14 +4,17 @@ use tracing::{error, info};
 
 pub mod cli;
 pub mod config;
+pub mod metrics;
 pub mod protocol;
 pub mod server;
 pub mod storage;
+pub mod telemetry;
 
 use cli::Cli;
 use config::{Config, StorageConfig};
 use server::Handler;
 use storage::StorageFactory;
+use telemetry::{TelemetryConfig, init_telemetry_with_config};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,6 +43,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
     
     info!("Starting Coral Redis Server v{}", env!("CARGO_PKG_VERSION"));
+    
+    // Initialize OpenTelemetry and metrics
+    let telemetry_config = TelemetryConfig {
+        enable_metrics: true,
+        ..Default::default()
+    };
+    let _telemetry = match init_telemetry_with_config(telemetry_config).await {
+        Ok(service) => service,
+        Err(e) => {
+            error!("Failed to initialize telemetry: {}", e);
+            std::process::exit(1);
+        }
+    };
     info!("Storage backend: {}", cli.storage);
     info!("Initializing storage backend: {:?}", config.storage);
     let storage = create_storage_backend(&config.storage).await?;
