@@ -1,12 +1,9 @@
 pub mod cli;
 pub mod config;
-pub mod handler;
-pub mod resp;
+pub mod protocol;
+pub mod server;
 pub mod storage;
-pub mod storage_backends;
 
-pub use cli::Cli;
-pub use config::Config;
-pub use handler::Handler;
-pub use resp::{RespParser, RespValue};
-pub use storage_backends::{StorageBackend, StorageError, StorageFactory};
+pub use server::Handler;
+pub use protocol::{RespParser, RespValue};
+pub use storage::{StorageBackend, StorageError, StorageFactory};

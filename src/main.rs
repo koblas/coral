@@ -4,15 +4,14 @@ use tracing::{error, info};
 
 pub mod cli;
 pub mod config;
-pub mod handler;
-pub mod resp;
+pub mod protocol;
+pub mod server;
 pub mod storage;
-pub mod storage_backends;
 
 use cli::Cli;
 use config::{Config, StorageConfig};
-use handler::Handler;
-use storage_backends::StorageFactory;
+use server::Handler;
+use storage::StorageFactory;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -61,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-async fn create_storage_backend(config: &StorageConfig) -> Result<Arc<dyn storage_backends::StorageBackend>, Box<dyn std::error::Error>> {
+async fn create_storage_backend(config: &StorageConfig) -> Result<Arc<dyn storage::StorageBackend>, Box<dyn std::error::Error>> {
     match config {
         StorageConfig::Memory => {
             info!("Using memory storage backend");
@@ -82,7 +81,7 @@ async fn create_storage_backend(config: &StorageConfig) -> Result<Arc<dyn storag
 
 async fn handle_connection(
     mut socket: TcpStream,
-    storage: Arc<dyn storage_backends::StorageBackend>,
+    storage: Arc<dyn storage::StorageBackend>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let handler = Handler::new(storage);
     handler.handle_stream(&mut socket).await

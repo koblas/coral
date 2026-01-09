@@ -1,5 +1,5 @@
-use crate::resp::{RespParser, RespValue};
-use crate::storage_backends::StorageBackend;
+use crate::protocol::{RespParser, RespValue};
+use crate::storage::StorageBackend;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -214,7 +214,7 @@ impl Handler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage_backends::memory::MemoryStorage;
+    use crate::storage::memory::MemoryStorage;
     use std::sync::Arc;
 
     fn create_handler() -> Handler {
