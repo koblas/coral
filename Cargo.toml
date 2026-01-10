@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1.0", features = ["full"] }
 bytes = "1.0"
-dashmap = "5.0"
+papaya = "0.1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 async-trait = "0.1"

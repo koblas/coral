@@ -103,11 +103,11 @@ impl Handler {
     /// Dispatch a Redis command to the appropriate handler.
     pub async fn handle_command(&mut self, value: RespValue) -> RespValue {
         let metrics = Metrics::get();
-        
+
         match value {
             RespValue::Array(Some(parts)) if !parts.is_empty() => {
-                let command = match &parts[0] {
-                    RespValue::BulkString(Some(cmd)) => cmd.to_uppercase(),
+                let cmd_str = match &parts[0] {
+                    RespValue::BulkString(Some(cmd)) => cmd,
                     _ => {
                         metrics.record_error("invalid_command_format", None);
                         return RespValue::Error("Invalid command format".to_string());
@@ -115,31 +115,103 @@ impl Handler {
                 };
 
                 let timer = Timer::new();
-                let response = match command.as_str() {
-                    "PING" => self.handle_ping(&parts[1..]).await,
-                    "SET" => self.handle_set(&parts[1..]).await,
-                    "GET" => self.handle_get(&parts[1..]).await,
-                    "DEL" => self.handle_del(&parts[1..]).await,
-                    "EXISTS" => self.handle_exists(&parts[1..]).await,
-                    "DBSIZE" => self.handle_dbsize().await,
-                    "FLUSHDB" => self.handle_flushdb().await,
-                    "COMMAND" => self.handle_command_info().await,
-                    "HELLO" => self.handle_hello(&parts[1..]).await,
+                let response = match Self::normalize_command(cmd_str) {
+                    "ping" => self.handle_ping(&parts[1..]).await,
+                    "set" => self.handle_set(&parts[1..]).await,
+                    "get" => self.handle_get(&parts[1..]).await,
+                    "del" => self.handle_del(&parts[1..]).await,
+                    "exists" => self.handle_exists(&parts[1..]).await,
+                    "dbsize" => self.handle_dbsize().await,
+                    "flushdb" => self.handle_flushdb().await,
+                    "command" => self.handle_command_info().await,
+                    "hello" => self.handle_hello(&parts[1..]).await,
                     _ => {
-                        metrics.record_error("unknown_command", Some(&command));
-                        RespValue::Error(format!("Unknown command: {}", command))
+                        metrics.record_error("unknown_command", Some(cmd_str));
+                        RespValue::Error(format!("Unknown command: {}", cmd_str))
                     }
                 };
-                
+
                 let duration = timer.elapsed_seconds();
-                metrics.record_command(&command, duration);
-                
+                metrics.record_command(cmd_str, duration);
+
                 response
             }
             _ => {
                 metrics.record_error("invalid_command_format", None);
                 RespValue::Error("Invalid command format".to_string())
             }
+        }
+    }
+
+    /// Normalize command to lowercase for case-insensitive matching.
+    /// Returns a static string slice for known commands to avoid allocations.
+    #[inline]
+    fn normalize_command(cmd: &str) -> &str {
+        // Fast path: check if already lowercase
+        if cmd.bytes().all(|b| b.is_ascii_lowercase() || !b.is_ascii_alphabetic()) {
+            return cmd;
+        }
+
+        // Common commands - return static strings
+        match cmd.len() {
+            3 => {
+                let bytes = cmd.as_bytes();
+                if bytes[0] | 0x20 == b'p' && bytes[1] | 0x20 == b'i' && bytes[2] | 0x20 == b'n' {
+                    if let Some(b'G' | b'g') = bytes.get(3) {
+                        return "ping";
+                    }
+                }
+                if bytes[0] | 0x20 == b's' && bytes[1] | 0x20 == b'e' && bytes[2] | 0x20 == b't' {
+                    return "set";
+                }
+                if bytes[0] | 0x20 == b'g' && bytes[1] | 0x20 == b'e' && bytes[2] | 0x20 == b't' {
+                    return "get";
+                }
+                if bytes[0] | 0x20 == b'd' && bytes[1] | 0x20 == b'e' && bytes[2] | 0x20 == b'l' {
+                    return "del";
+                }
+                cmd
+            },
+            4 => {
+                let bytes = cmd.as_bytes();
+                if bytes[0] | 0x20 == b'p' && bytes[1] | 0x20 == b'i' && bytes[2] | 0x20 == b'n' && bytes[3] | 0x20 == b'g' {
+                    return "ping";
+                }
+                cmd
+            },
+            5 => {
+                let bytes = cmd.as_bytes();
+                if bytes[0] | 0x20 == b'h' && bytes[1] | 0x20 == b'e' && bytes[2] | 0x20 == b'l'
+                    && bytes[3] | 0x20 == b'l' && bytes[4] | 0x20 == b'o' {
+                    return "hello";
+                }
+                cmd
+            },
+            6 => {
+                let bytes = cmd.as_bytes();
+                if bytes[0] | 0x20 == b'e' && bytes[1] | 0x20 == b'x' && bytes[2] | 0x20 == b'i'
+                    && bytes[3] | 0x20 == b's' && bytes[4] | 0x20 == b't' && bytes[5] | 0x20 == b's' {
+                    return "exists";
+                }
+                if bytes[0] | 0x20 == b'd' && bytes[1] | 0x20 == b'b' && bytes[2] | 0x20 == b's'
+                    && bytes[3] | 0x20 == b'i' && bytes[4] | 0x20 == b'z' && bytes[5] | 0x20 == b'e' {
+                    return "dbsize";
+                }
+                cmd
+            },
+            7 => {
+                let bytes = cmd.as_bytes();
+                if bytes[0] | 0x20 == b'c' && bytes[1] | 0x20 == b'o' && bytes[2] | 0x20 == b'm'
+                    && bytes[3] | 0x20 == b'm' && bytes[4] | 0x20 == b'a' && bytes[5] | 0x20 == b'n' && bytes[6] | 0x20 == b'd' {
+                    return "command";
+                }
+                if bytes[0] | 0x20 == b'f' && bytes[1] | 0x20 == b'l' && bytes[2] | 0x20 == b'u'
+                    && bytes[3] | 0x20 == b's' && bytes[4] | 0x20 == b'h' && bytes[5] | 0x20 == b'd' && bytes[6] | 0x20 == b'b' {
+                    return "flushdb";
+                }
+                cmd
+            },
+            _ => cmd,
         }
     }
 
@@ -158,18 +230,18 @@ impl Handler {
 
     async fn handle_set(&self, args: &[RespValue]) -> RespValue {
         let metrics = Metrics::get();
-        
+
         if args.len() < 2 {
             return RespValue::Error("Wrong number of arguments for SET".to_string());
         }
 
         let key = match &args[0] {
-            RespValue::BulkString(Some(k)) => k.clone(),
+            RespValue::BulkString(Some(k)) => k,
             _ => return RespValue::Error("Invalid key".to_string()),
         };
 
         let value = match &args[1] {
-            RespValue::BulkString(Some(v)) => v.clone(),
+            RespValue::BulkString(Some(v)) => v,
             _ => return RespValue::Error("Invalid value".to_string()),
         };
 
@@ -178,13 +250,13 @@ impl Handler {
             if let (RespValue::BulkString(Some(option)), RespValue::BulkString(Some(ttl_str))) =
                 (&args[2], &args[3])
             {
-                if option.to_uppercase() == "EX" {
+                if option.eq_ignore_ascii_case("EX") {
                     if let Ok(ttl_secs) = ttl_str.parse::<u64>() {
                         let timer = Timer::new();
                         let result = self.storage
-                            .set_with_expiry(key.clone(), value, Duration::from_secs(ttl_secs)).await;
+                            .set_with_expiry(key.to_string(), value.to_string(), Duration::from_secs(ttl_secs)).await;
                         let duration = timer.elapsed_seconds();
-                        
+
                         match result {
                             Ok(()) => {
                                 metrics.record_storage_operation("set_with_expiry", "storage", duration);
@@ -204,7 +276,7 @@ impl Handler {
         }
 
         let timer = Timer::new();
-        let result = self.storage.set(key.clone(), value).await;
+        let result = self.storage.set(key.to_string(), value.to_string()).await;
         let duration = timer.elapsed_seconds();
         
         match result {

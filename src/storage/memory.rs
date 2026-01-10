@@ -1,14 +1,15 @@
 use super::{StorageBackend, StorageError, StorageValue};
 use async_trait::async_trait;
-use dashmap::DashMap;
+use papaya::HashMap;
 use std::time::Duration;
 
 /// In-memory storage backend using concurrent hashmap.
 ///
 /// Fastest backend option. Data is volatile and lost on shutdown.
 /// Uses lazy expiry cleanup (expired keys removed on access).
+/// Built on papaya for high-performance concurrent access.
 pub struct MemoryStorage {
-    data: DashMap<String, StorageValue>,
+    data: HashMap<String, StorageValue>,
 }
 
 impl Default for MemoryStorage {
@@ -20,7 +21,7 @@ impl Default for MemoryStorage {
 impl MemoryStorage {
     pub fn new() -> Self {
         Self {
-            data: DashMap::new(),
+            data: HashMap::new(),
         }
     }
 }
@@ -28,20 +29,26 @@ impl MemoryStorage {
 #[async_trait]
 impl StorageBackend for MemoryStorage {
     async fn set(&self, key: String, value: String) -> Result<(), StorageError> {
-        self.data.insert(key, StorageValue::new(value));
+        let guard = self.data.pin();
+        guard.insert(key, StorageValue::new(value));
         Ok(())
     }
 
     async fn set_with_expiry(&self, key: String, value: String, ttl: Duration) -> Result<(), StorageError> {
-        self.data.insert(key, StorageValue::new_with_expiry(value, ttl));
+        let guard = self.data.pin();
+        guard.insert(key, StorageValue::new_with_expiry(value, ttl));
         Ok(())
     }
 
     async fn get(&self, key: &str) -> Result<Option<String>, StorageError> {
-        if let Some(entry) = self.data.get(key) {
+        let guard = self.data.pin();
+
+        if let Some(entry) = guard.get(key) {
             if entry.is_expired() {
-                drop(entry);
-                self.data.remove(key);
+                // Drop guard before removing to avoid holding reference
+                drop(guard);
+                let remove_guard = self.data.pin();
+                remove_guard.remove(key);
                 Ok(None)
             } else {
                 Ok(Some(entry.data.clone()))
@@ -52,14 +59,19 @@ impl StorageBackend for MemoryStorage {
     }
 
     async fn delete(&self, key: &str) -> Result<bool, StorageError> {
-        Ok(self.data.remove(key).is_some())
+        let guard = self.data.pin();
+        Ok(guard.remove(key).is_some())
     }
 
     async fn exists(&self, key: &str) -> Result<bool, StorageError> {
-        if let Some(entry) = self.data.get(key) {
+        let guard = self.data.pin();
+
+        if let Some(entry) = guard.get(key) {
             if entry.is_expired() {
-                drop(entry);
-                self.data.remove(key);
+                // Drop guard before removing
+                drop(guard);
+                let remove_guard = self.data.pin();
+                remove_guard.remove(key);
                 Ok(false)
             } else {
                 Ok(true)
@@ -70,28 +82,33 @@ impl StorageBackend for MemoryStorage {
     }
 
     async fn keys_count(&self) -> Result<usize, StorageError> {
-        // Clean up expired keys during count
-        let expired_keys: Vec<String> = self
-            .data
-            .iter()
-            .filter_map(|entry| {
-                if entry.value().is_expired() {
-                    Some(entry.key().clone())
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Count non-expired keys and collect expired ones
+        let mut count = 0;
+        let mut expired_keys = Vec::new();
 
-        for key in expired_keys {
-            self.data.remove(&key);
+        {
+            let guard = self.data.pin();
+            for (key, value) in guard.iter() {
+                if value.is_expired() {
+                    expired_keys.push(key.clone());
+                } else {
+                    count += 1;
+                }
+            }
         }
 
-        Ok(self.data.len())
+        // Remove expired keys
+        let remove_guard = self.data.pin();
+        for key in expired_keys {
+            remove_guard.remove(&key);
+        }
+
+        Ok(count)
     }
 
     async fn flush(&self) -> Result<(), StorageError> {
-        self.data.clear();
+        let guard = self.data.pin();
+        guard.clear();
         Ok(())
     }
 }

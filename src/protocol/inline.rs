@@ -17,14 +17,15 @@ impl InlineParser {
         // Find \r\n terminator
         let end_pos = buffer.windows(2).position(|w| w == b"\r\n");
 
-        if end_pos.is_none() {
-            return Ok(None); // Incomplete command
-        }
+        let end_pos = match end_pos {
+            Some(pos) => pos,
+            None => return Ok(None), // Incomplete command
+        };
 
-        let line_data = &buffer[0..end_pos.unwrap()];
+        let line_data = &buffer[0..end_pos];
 
-        // Convert to string
-        let line = String::from_utf8(line_data.to_vec())
+        // Convert to string without allocating a vec
+        let line = std::str::from_utf8(line_data)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid UTF-8 in inline command"))?;
 
         // Parse the command line
@@ -60,8 +61,7 @@ impl InlineParser {
                 }
                 ' ' | '\t' if !in_quotes => {
                     if !current.is_empty() {
-                        parts.push(current.clone());
-                        current.clear();
+                        parts.push(std::mem::take(&mut current));
                     }
                 }
                 '\\' if in_quotes => {
