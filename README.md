@@ -4,10 +4,13 @@ A high-performance Redis-compatible server implementation written in Rust, featu
 
 ## ✨ Features
 
-- **Redis Protocol Compatible**: Full RESP (Redis Serialization Protocol) support
+- **Redis Protocol Compatible**: Full RESP2 and RESP3 (Redis Serialization Protocol) support
+- **Inline Commands**: Support for telnet-style space-separated commands
+- **Protocol Auto-Detection**: Automatically detects RESP vs inline command format
 - **Multiple Storage Backends**: Memory, LMDB, and S3-compatible storage
 - **OpenTelemetry Metrics**: Comprehensive performance monitoring and observability
 - **Async/Await**: Built on Tokio for high-performance async I/O
+- **Graceful Error Handling**: Protocol errors send error responses without closing connections
 
 ## 🚀 Quick Start
 
@@ -42,17 +45,58 @@ cargo build --release
 
 ## 📋 Supported Redis Commands
 
-| Command      | Description              | Status |
-| ------------ | ------------------------ | ------ |
-| `PING`       | Test server connectivity | ✅     |
-| `SET`        | Set key-value pair       | ✅     |
-| `GET`        | Retrieve value by key    | ✅     |
-| `DEL`        | Delete keys              | ✅     |
-| `EXISTS`     | Check key existence      | ✅     |
-| `DBSIZE`     | Get database size        | ✅     |
-| `FLUSHDB`    | Clear database           | ✅     |
-| `COMMAND`    | Get command info         | ✅     |
-| `SET ... EX` | Set with expiration      | ✅     |
+| Command      | Description                   | Status |
+| ------------ | ----------------------------- | ------ |
+| `PING`       | Test server connectivity      | ✅     |
+| `SET`        | Set key-value pair            | ✅     |
+| `GET`        | Retrieve value by key         | ✅     |
+| `DEL`        | Delete keys                   | ✅     |
+| `EXISTS`     | Check key existence           | ✅     |
+| `DBSIZE`     | Get database size             | ✅     |
+| `FLUSHDB`    | Clear database                | ✅     |
+| `COMMAND`    | Get command info              | ✅     |
+| `HELLO`      | Protocol negotiation (RESP3)  | ✅     |
+| `SET ... EX` | Set with expiration           | ✅     |
+
+### Protocol Support
+
+#### RESP2 (Default)
+Standard Redis protocol with 5 data types:
+- Simple Strings (`+`)
+- Errors (`-`)
+- Integers (`:`)
+- Bulk Strings (`$`)
+- Arrays (`*`)
+
+#### RESP3
+Enhanced protocol with additional types:
+- Null (`_`)
+- Boolean (`#`)
+- Double (`,`)
+- Set (`~`)
+- Map (`%`)
+
+Use the `HELLO` command to negotiate protocol version:
+```bash
+# Switch to RESP3
+HELLO 3
+
+# Stay on RESP2 (default)
+HELLO 2
+```
+
+#### Inline Commands
+Supports telnet-style commands for easy testing:
+```bash
+telnet localhost 6379
+> PING
++PONG
+> SET mykey myvalue
++OK
+> GET mykey
+$7
+myvalue
+```
 
 ## ⚙️ Configuration
 
@@ -167,23 +211,24 @@ cargo bench
 
 ### Test Coverage
 
-- **Unit Tests**: 27 tests covering protocol, storage, and handlers
-- **Integration Tests**: 3 end-to-end tests with real TCP connections
-- **Coverage**: Core functionality comprehensively tested
+- **Unit Tests**: 60 tests covering RESP2/RESP3 protocol, inline commands, storage backends, and command handlers
+- **Integration Tests**: 4 end-to-end tests including protocol error recovery
+- **Coverage**: Comprehensive testing of core functionality, RESP3 types, and error handling
 
 ## 🏛️ Architecture
 
 ```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   TCP Client    │────│  RESP Protocol   │────│   Handler       │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                                                          │
-                       ┌──────────────────┐              │
-                       │   Metrics        │──────────────┤
-                       └──────────────────┘              │
-                                                          │
-                       ┌──────────────────┐              │
-                       │ Storage Backends │──────────────┘
+┌─────────────────┐    ┌──────────────────────────┐    ┌─────────────────┐
+│   TCP Client    │────│  Protocol Detection      │────│   Handler       │
+│  (RESP/Telnet)  │    │  (RESP2/RESP3/Inline)    │    │  (versioned)    │
+└─────────────────┘    └──────────────────────────┘    └─────────────────┘
+                                                                  │
+                       ┌──────────────────┐                      │
+                       │   Metrics        │──────────────────────┤
+                       └──────────────────┘                      │
+                                                                  │
+                       ┌──────────────────┐                      │
+                       │ Storage Backends │──────────────────────┘
                        │ ┌─────────────┐  │
                        │ │   Memory    │  │
                        │ ├─────────────┤  │
@@ -196,8 +241,8 @@ cargo bench
 
 ### Key Components
 
-- **Protocol Layer** (`src/protocol/`): RESP parsing and serialization
-- **Server Layer** (`src/server/`): Connection handling and command processing
+- **Protocol Layer** (`src/protocol/`): RESP2/RESP3 parsing, inline command support, auto-detection
+- **Server Layer** (`src/server/`): Connection handling, command processing, protocol version management
 - **Storage Layer** (`src/storage/`): Pluggable storage backend abstraction
 - **Metrics Layer** (`src/metrics/`): OpenTelemetry instrumentation
 - **Telemetry** (`src/telemetry/`): Observability configuration

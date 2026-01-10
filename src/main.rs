@@ -99,6 +99,6 @@ async fn handle_connection(
     mut socket: TcpStream,
     storage: Arc<dyn storage::StorageBackend>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let handler = Handler::new(storage);
+    let mut handler = Handler::new(storage);
     handler.handle_stream(&mut socket).await
 }

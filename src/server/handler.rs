@@ -1,5 +1,5 @@
 use crate::metrics::{Metrics, Timer};
-use crate::protocol::{RespParser, RespValue};
+use crate::protocol::{ProtocolVersion, RespParser, RespValue};
 use crate::storage::StorageBackend;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,19 +10,40 @@ use tracing::{debug, warn};
 /// Handles client connections and Redis command processing.
 ///
 /// Parses RESP protocol, dispatches commands, and records metrics.
+/// Tracks protocol version per connection for RESP2/RESP3 support.
 pub struct Handler {
     storage: Arc<dyn StorageBackend>,
+    protocol_version: ProtocolVersion,
 }
 
 impl Handler {
     /// Create a new handler with the given storage backend.
+    /// Defaults to RESP2 protocol.
     pub fn new(storage: Arc<dyn StorageBackend>) -> Self {
-        Self { storage }
+        Self::new_with_protocol(storage, ProtocolVersion::default())
+    }
+
+    /// Create a new handler with specified protocol version.
+    pub fn new_with_protocol(storage: Arc<dyn StorageBackend>, protocol_version: ProtocolVersion) -> Self {
+        Self {
+            storage,
+            protocol_version,
+        }
+    }
+
+    /// Get the current protocol version for this connection.
+    pub fn protocol_version(&self) -> ProtocolVersion {
+        self.protocol_version
+    }
+
+    /// Set the protocol version for this connection.
+    pub fn set_protocol_version(&mut self, version: ProtocolVersion) {
+        self.protocol_version = version;
     }
 
     /// Process commands from a TCP connection until it closes.
     pub async fn handle_stream(
-        &self,
+        &mut self,
         stream: &mut TcpStream,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let metrics = Metrics::get();
@@ -39,18 +60,40 @@ impl Handler {
 
             parser.add_data(&buffer[0..n]);
 
-            while let Some(value) = parser.parse()? {
-                debug!("Received command: {:?}", value);
-                
-                let timer = Timer::new();
-                let response = self.handle_command(value).await;
-                let duration = timer.elapsed_seconds();
-                
-                metrics.record_request(duration);
-                
-                let response_bytes = response.to_bytes();
-                stream.write_all(&response_bytes).await?;
-                stream.flush().await?;
+            loop {
+                match parser.parse() {
+                    Ok(Some(value)) => {
+                        debug!("Received command: {:?}", value);
+
+                        let timer = Timer::new();
+                        let response = self.handle_command(value).await;
+                        let duration = timer.elapsed_seconds();
+
+                        metrics.record_request(duration);
+
+                        let response_bytes = response.to_bytes();
+                        stream.write_all(&response_bytes).await?;
+                        stream.flush().await?;
+                    }
+                    Ok(None) => {
+                        // Need more data
+                        break;
+                    }
+                    Err(e) => {
+                        // Protocol error - send error response but keep connection alive
+                        warn!("Protocol error: {}", e);
+                        metrics.record_error("protocol_error", None);
+
+                        let error = RespValue::Error(format!("ERR Protocol error: {}", e));
+                        let error_bytes = error.to_bytes();
+                        stream.write_all(&error_bytes).await?;
+                        stream.flush().await?;
+
+                        // Reset parser to recover from error
+                        parser.reset();
+                        break;
+                    }
+                }
             }
         }
 
@@ -58,7 +101,7 @@ impl Handler {
     }
 
     /// Dispatch a Redis command to the appropriate handler.
-    pub async fn handle_command(&self, value: RespValue) -> RespValue {
+    pub async fn handle_command(&mut self, value: RespValue) -> RespValue {
         let metrics = Metrics::get();
         
         match value {
@@ -81,6 +124,7 @@ impl Handler {
                     "DBSIZE" => self.handle_dbsize().await,
                     "FLUSHDB" => self.handle_flushdb().await,
                     "COMMAND" => self.handle_command_info().await,
+                    "HELLO" => self.handle_hello(&parts[1..]).await,
                     _ => {
                         metrics.record_error("unknown_command", Some(&command));
                         RespValue::Error(format!("Unknown command: {}", command))
@@ -293,6 +337,61 @@ impl Handler {
         // Return empty array for COMMAND (Redis clients sometimes call this)
         RespValue::Array(Some(vec![]))
     }
+
+    /// Handle HELLO command for protocol negotiation.
+    /// Format: HELLO [protover [AUTH username password] [SETNAME clientname]]
+    async fn handle_hello(&mut self, args: &[RespValue]) -> RespValue {
+        // Parse protocol version if provided
+        let requested_version = if args.is_empty() {
+            None
+        } else {
+            match &args[0] {
+                RespValue::BulkString(Some(ver_str)) => {
+                    match ver_str.parse::<u8>() {
+                        Ok(2) => Some(ProtocolVersion::Resp2),
+                        Ok(3) => Some(ProtocolVersion::Resp3),
+                        Ok(v) => return RespValue::Error(format!("ERR unsupported protocol version: {}", v)),
+                        Err(_) => return RespValue::Error("ERR protocol version must be a number".to_string()),
+                    }
+                }
+                _ => return RespValue::Error("ERR protocol version must be a string".to_string()),
+            }
+        };
+
+        // Set protocol version if requested
+        if let Some(version) = requested_version {
+            self.set_protocol_version(version);
+        }
+
+        // Build response based on current protocol version
+        match self.protocol_version() {
+            ProtocolVersion::Resp3 => {
+                // RESP3: Return Map
+                RespValue::Map(vec![
+                    (RespValue::BulkString(Some("server".to_string())), RespValue::BulkString(Some("coral-redis".to_string()))),
+                    (RespValue::BulkString(Some("version".to_string())), RespValue::BulkString(Some("0.1.0".to_string()))),
+                    (RespValue::BulkString(Some("proto".to_string())), RespValue::Integer(3)),
+                    (RespValue::BulkString(Some("mode".to_string())), RespValue::BulkString(Some("standalone".to_string()))),
+                    (RespValue::BulkString(Some("role".to_string())), RespValue::BulkString(Some("master".to_string()))),
+                ])
+            }
+            ProtocolVersion::Resp2 => {
+                // RESP2: Return Array (key1, value1, key2, value2, ...)
+                RespValue::Array(Some(vec![
+                    RespValue::BulkString(Some("server".to_string())),
+                    RespValue::BulkString(Some("coral-redis".to_string())),
+                    RespValue::BulkString(Some("version".to_string())),
+                    RespValue::BulkString(Some("0.1.0".to_string())),
+                    RespValue::BulkString(Some("proto".to_string())),
+                    RespValue::Integer(2),
+                    RespValue::BulkString(Some("mode".to_string())),
+                    RespValue::BulkString(Some("standalone".to_string())),
+                    RespValue::BulkString(Some("role".to_string())),
+                    RespValue::BulkString(Some("master".to_string())),
+                ]))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -479,19 +578,105 @@ mod tests {
     #[tokio::test]
     async fn test_invalid_commands() {
         let handler = create_handler();
-        
+
         // Test wrong number of arguments for SET
         let result = handler.handle_set(&[]).await;
         match result {
             RespValue::Error(_) => {},
             _ => panic!("Expected Error"),
         }
-        
+
         // Test wrong number of arguments for GET
         let result = handler.handle_get(&[]).await;
         match result {
             RespValue::Error(_) => {},
             _ => panic!("Expected Error"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_hello_no_args() {
+        let mut handler = create_handler();
+
+        // HELLO with no arguments should return current version info
+        let result = handler.handle_hello(&[]).await;
+
+        // Default is RESP2, so should get Array response
+        match result {
+            RespValue::Array(Some(items)) => {
+                assert_eq!(items.len(), 10); // 5 key-value pairs
+            },
+            _ => panic!("Expected Array for RESP2 response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hello_resp2() {
+        let mut handler = create_handler();
+
+        // Request RESP2 protocol
+        let args = vec![RespValue::BulkString(Some("2".to_string()))];
+        let result = handler.handle_hello(&args).await;
+
+        // Should get Array response (RESP2 format)
+        match result {
+            RespValue::Array(Some(items)) => {
+                assert_eq!(items.len(), 10); // 5 key-value pairs
+            },
+            _ => panic!("Expected Array for RESP2 response"),
+        }
+
+        // Verify protocol version was set
+        assert_eq!(handler.protocol_version(), ProtocolVersion::Resp2);
+    }
+
+    #[tokio::test]
+    async fn test_hello_resp3() {
+        let mut handler = create_handler();
+
+        // Request RESP3 protocol
+        let args = vec![RespValue::BulkString(Some("3".to_string()))];
+        let result = handler.handle_hello(&args).await;
+
+        // Should get Map response (RESP3 format)
+        match result {
+            RespValue::Map(pairs) => {
+                assert_eq!(pairs.len(), 5);
+
+                // Verify "proto" field is 3
+                let proto_field = pairs.iter().find(|(k, _)| {
+                    matches!(k, RespValue::BulkString(Some(s)) if s == "proto")
+                });
+                assert!(proto_field.is_some());
+
+                if let Some((_, RespValue::Integer(proto))) = proto_field {
+                    assert_eq!(*proto, 3);
+                }
+            },
+            _ => panic!("Expected Map for RESP3 response"),
+        }
+
+        // Verify protocol version was set
+        assert_eq!(handler.protocol_version(), ProtocolVersion::Resp3);
+    }
+
+    #[tokio::test]
+    async fn test_hello_invalid_version() {
+        let mut handler = create_handler();
+
+        // Request invalid protocol version
+        let args = vec![RespValue::BulkString(Some("99".to_string()))];
+        let result = handler.handle_hello(&args).await;
+
+        // Should get error
+        match result {
+            RespValue::Error(msg) => {
+                assert!(msg.contains("unsupported protocol version"));
+            },
+            _ => panic!("Expected Error for invalid version"),
+        }
+
+        // Verify protocol version unchanged (still default RESP2)
+        assert_eq!(handler.protocol_version(), ProtocolVersion::Resp2);
     }
 }
