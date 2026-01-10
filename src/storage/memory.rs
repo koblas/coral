@@ -3,6 +3,10 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use std::time::Duration;
 
+/// In-memory storage backend using concurrent hashmap.
+///
+/// Fastest backend option. Data is volatile and lost on shutdown.
+/// Uses lazy expiry cleanup (expired keys removed on access).
 pub struct MemoryStorage {
     data: DashMap<String, StorageValue>,
 }

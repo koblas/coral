@@ -3,6 +3,7 @@ use opentelemetry_sdk::metrics::MeterProvider;
 use std::time::Duration;
 use tracing::info;
 
+/// Configuration for telemetry collection.
 pub struct TelemetryConfig {
     pub enable_metrics: bool,
     pub collection_interval: Duration,
@@ -17,6 +18,9 @@ impl Default for TelemetryConfig {
     }
 }
 
+/// Manages OpenTelemetry initialization and lifecycle.
+///
+/// Sets up metrics collection with push-based exporter.
 pub struct TelemetryService {
     config: TelemetryConfig,
 }

@@ -1,3 +1,7 @@
+//! Storage backend implementations and abstractions.
+//!
+//! Provides pluggable storage with Memory, LMDB, and S3 backends.
+
 pub mod traits;
 pub mod memory;
 pub mod lmdb;

@@ -3,6 +3,10 @@ use opentelemetry::{global, KeyValue};
 use std::sync::OnceLock;
 use std::time::Instant;
 
+/// OpenTelemetry metrics for server observability.
+///
+/// Tracks connections, requests, commands, storage ops, and errors.
+/// Singleton instance accessed via `Metrics::get()`.
 pub struct Metrics {
     // Server-level metrics
     pub connections_total: Counter<u64>,

@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Main configuration combining server and storage settings.
+///
+/// Can be loaded from files, env vars, or CLI args with precedence order:
+/// CLI > File > Environment > Defaults
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,

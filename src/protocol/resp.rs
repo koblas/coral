@@ -1,16 +1,20 @@
 use bytes::{Buf, BytesMut};
 use std::io;
 
+/// RESP (Redis Serialization Protocol) value types.
+///
+/// Supports all Redis protocol types including null variants.
 #[derive(Debug, Clone)]
 pub enum RespValue {
     SimpleString(String),
     Error(String),
     Integer(i64),
-    BulkString(Option<String>),
-    Array(Option<Vec<RespValue>>),
+    BulkString(Option<String>), // None represents null
+    Array(Option<Vec<RespValue>>), // None represents null
 }
 
 impl RespValue {
+    /// Serialize this value to Redis wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {
             RespValue::SimpleString(s) => format!("+{}\r\n", s).into_bytes(),
@@ -30,6 +34,9 @@ impl RespValue {
     }
 }
 
+/// Stateful parser for Redis protocol messages.
+///
+/// Accumulates data in a buffer and parses complete RESP values.
 pub struct RespParser {
     buffer: BytesMut,
 }
@@ -47,10 +54,12 @@ impl RespParser {
         }
     }
 
+    /// Add incoming bytes to the parser buffer.
     pub fn add_data(&mut self, data: &[u8]) {
         self.buffer.extend_from_slice(data);
     }
 
+    /// Parse next complete value. Returns None if incomplete.
     pub fn parse(&mut self) -> Result<Option<RespValue>, io::Error> {
         if self.buffer.is_empty() {
             return Ok(None);

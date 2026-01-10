@@ -1,3 +1,8 @@
+//! Coral Redis - A Redis-compatible server with pluggable storage backends.
+//!
+//! This library provides a Redis protocol implementation with support for
+//! multiple storage backends (Memory, LMDB, S3) and comprehensive observability.
+
 pub mod cli;
 pub mod config;
 pub mod metrics;

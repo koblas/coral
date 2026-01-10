@@ -7,15 +7,20 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::{debug, warn};
 
+/// Handles client connections and Redis command processing.
+///
+/// Parses RESP protocol, dispatches commands, and records metrics.
 pub struct Handler {
     storage: Arc<dyn StorageBackend>,
 }
 
 impl Handler {
+    /// Create a new handler with the given storage backend.
     pub fn new(storage: Arc<dyn StorageBackend>) -> Self {
         Self { storage }
     }
 
+    /// Process commands from a TCP connection until it closes.
     pub async fn handle_stream(
         &self,
         stream: &mut TcpStream,
@@ -52,6 +57,7 @@ impl Handler {
         Ok(())
     }
 
+    /// Dispatch a Redis command to the appropriate handler.
     pub async fn handle_command(&self, value: RespValue) -> RespValue {
         let metrics = Metrics::get();
         
