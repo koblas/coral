@@ -58,7 +58,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     info!("Storage backend: {}", cli.storage);
     info!("Initializing storage backend: {:?}", config.storage);
-    let storage = create_storage_backend(&config.storage).await?;
+    let storage = match create_storage_backend(&config.storage).await {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Failed to initialize storage backend: {}", e);
+            std::process::exit(1);
+        }
+    };
     
     let listener = TcpListener::bind(&bind_addr).await?;
     info!("Redis server listening on {}", bind_addr);

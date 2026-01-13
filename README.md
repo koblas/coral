@@ -185,10 +185,13 @@ Options:
 - **Use Case**: Single-node persistence, high read performance
 - **Features**: ACID transactions, memory-mapped files
 - **Configuration**: Always available (no feature flag required)
+- **Default Map Size**: 10GB (address space reservation, not actual disk usage)
 
 ```bash
 ./target/release/coral-redis --storage lmdb --lmdb-path ./data.lmdb
 ```
+
+**Note**: LMDB uses memory-mapped files with a fixed maximum size (map size). The default is 10GB, which is just address space reservation on 64-bit systems and doesn't consume actual memory or disk space until data is written. If you encounter `MDB_MAP_FULL` errors, the database has reached its maximum size.
 
 ### S3 Storage
 

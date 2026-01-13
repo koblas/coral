@@ -286,9 +286,10 @@ impl Handler {
                                 metrics.record_key_operation("set", 1);
                                 return RespValue::SimpleString("OK".to_string());
                             }
-                            Err(_e) => {
+                            Err(e) => {
                                 metrics.record_storage_error("set_with_expiry", "storage", "operation_failed");
-                                return RespValue::Error("SET failed".to_string());
+                                warn!("SET with expiry failed: {}", e);
+                                return RespValue::Error(format!("SET failed: {}", e));
                             }
                         }
                     } else {
@@ -308,9 +309,10 @@ impl Handler {
                 metrics.record_key_operation("set", 1);
                 RespValue::SimpleString("OK".to_string())
             }
-            Err(_) => {
+            Err(e) => {
                 metrics.record_storage_error("set", "storage", "operation_failed");
-                RespValue::Error("SET failed".to_string())
+                warn!("SET failed: {}", e);
+                RespValue::Error(format!("SET failed: {}", e))
             }
         }
     }
@@ -340,9 +342,10 @@ impl Handler {
                 metrics.record_storage_operation("get", "storage", duration);
                 RespValue::BulkString(None)
             }
-            Err(_) => {
+            Err(e) => {
                 metrics.record_storage_error("get", "storage", "operation_failed");
-                RespValue::Error("GET failed".to_string())
+                warn!("GET failed for key '{}': {}", key, e);
+                RespValue::Error(format!("GET failed: {}", e))
             }
         }
     }
@@ -377,9 +380,9 @@ impl Handler {
                     metrics.record_storage_operation("delete", "storage", duration);
                     // Key didn't exist, not an error
                 }
-                Err(_) => {
+                Err(e) => {
                     metrics.record_storage_error("delete", "storage", "operation_failed");
-                    warn!("Failed to delete key: {}", key);
+                    warn!("Failed to delete key '{}': {}", key, e);
                 }
             }
         }
@@ -405,8 +408,8 @@ impl Handler {
             match self.storage.exists(key).await {
                 Ok(true) => exists_count += 1,
                 Ok(false) => {},
-                Err(_) => {
-                    warn!("Failed to check existence of key: {}", key);
+                Err(e) => {
+                    warn!("Failed to check existence of key '{}': {}", key, e);
                 }
             }
         }
@@ -417,14 +420,20 @@ impl Handler {
     async fn handle_dbsize(&self) -> RespValue {
         match self.storage.keys_count().await {
             Ok(count) => RespValue::Integer(count as i64),
-            Err(_) => RespValue::Error("DBSIZE failed".to_string()),
+            Err(e) => {
+                warn!("DBSIZE failed: {}", e);
+                RespValue::Error(format!("DBSIZE failed: {}", e))
+            }
         }
     }
 
     async fn handle_flushdb(&self) -> RespValue {
         match self.storage.flush().await {
             Ok(()) => RespValue::SimpleString("OK".to_string()),
-            Err(_) => RespValue::Error("FLUSHDB failed".to_string()),
+            Err(e) => {
+                warn!("FLUSHDB failed: {}", e);
+                RespValue::Error(format!("FLUSHDB failed: {}", e))
+            }
         }
     }
 

@@ -50,10 +50,25 @@ pub struct LmdbStorage {
 }
 
 impl LmdbStorage {
+    /// Create a new LMDB storage with default map size (10GB)
     pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, StorageError> {
+        Self::new_with_map_size(path, 10 * 1024 * 1024 * 1024) // 10GB default
+    }
+
+    /// Create a new LMDB storage with custom map size
+    ///
+    /// # Arguments
+    /// * `path` - Path to the LMDB database file
+    /// * `map_size` - Maximum size the database can grow to in bytes
+    ///
+    /// # Note
+    /// On 64-bit systems, this is just address space reservation and doesn't
+    /// consume actual memory or disk space until data is written.
+    pub fn new_with_map_size<P: AsRef<Path>>(path: P, map_size: usize) -> Result<Self, StorageError> {
         let env = lmdb::Environment::new()
             .set_flags(lmdb::EnvironmentFlags::NO_SUB_DIR)
             .set_max_dbs(1)
+            .set_map_size(map_size)
             .open(path.as_ref())
             .map_err(|e| StorageError::ConnectionError(format!("LMDB open error: {}", e)))?;
 
