@@ -85,7 +85,6 @@ async fn create_storage_backend(config: &StorageConfig) -> Result<Arc<dyn storag
             info!("Using memory storage backend");
             Ok(Arc::from(StorageFactory::create_memory().await))
         },
-        #[cfg(feature = "lmdb-backend")]
         StorageConfig::Lmdb { path } => {
             info!("Using LMDB storage backend at path: {:?}", path);
             Ok(Arc::from(StorageFactory::create_lmdb(path).await?))

@@ -24,23 +24,34 @@ A high-performance Redis-compatible server implementation written in Rust, featu
 ```bash
 git clone https://github.com/koblas/coral.git
 cd coral
+
+# Build with default features (memory and LMDB storage)
 cargo build --release
+
+# Build with S3 support
+cargo build --release --features s3-backend
 ```
 
 ### Running the Server
 
 ```bash
 # Start with in-memory storage (default)
+./target/release/coral-redis
+# or explicitly:
 ./target/release/coral-redis --storage memory
 
 # Start with LMDB persistence
-./target/release/coral-redis --storage lmdb --lmdb-path ./data
+./target/release/coral-redis --storage lmdb --lmdb-path ./data.lmdb
 
-# Start with S3 backend
+# Start with S3 backend (requires s3-backend feature)
+cargo build --release --features s3-backend
 ./target/release/coral-redis --storage s3 --s3-bucket my-bucket --s3-region us-west-2
 
 # Enable verbose logging
-./target/release/coral-redis --storage memory --verbose
+./target/release/coral-redis --verbose
+
+# Custom host and port
+./target/release/coral-redis --host 0.0.0.0 --port 6380
 ```
 
 ## 📋 Supported Redis Commands
@@ -173,21 +184,20 @@ Options:
 
 - **Use Case**: Single-node persistence, high read performance
 - **Features**: ACID transactions, memory-mapped files
-- **Configuration**: Requires `lmdb` feature flag
+- **Configuration**: Always available (no feature flag required)
 
 ```bash
-cargo build --release --features lmdb
-./target/release/coral-redis --storage lmdb --lmdb-path ./data
+./target/release/coral-redis --storage lmdb --lmdb-path ./data.lmdb
 ```
 
 ### S3 Storage
 
 - **Use Case**: Distributed storage, backup, archival
 - **Features**: Scalable, durable, multi-region support
-- **Configuration**: Requires `s3` feature flag and AWS credentials
+- **Configuration**: Requires `s3-backend` feature flag and AWS credentials
 
 ```bash
-cargo build --release --features s3
+cargo build --release --features s3-backend
 export AWS_ACCESS_KEY_ID=your_access_key
 export AWS_SECRET_ACCESS_KEY=your_secret_key
 ./target/release/coral-redis --storage s3 --s3-bucket my-bucket

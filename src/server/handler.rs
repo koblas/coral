@@ -484,7 +484,6 @@ impl Handler {
                     results.push(RespValue::BulkString(Some("storage-backend".to_string())));
                     let backend = match &self.config.storage {
                         crate::config::StorageConfig::Memory => "memory",
-                        #[cfg(feature = "lmdb-backend")]
                         crate::config::StorageConfig::Lmdb { .. } => "lmdb",
                         #[cfg(feature = "s3-backend")]
                         crate::config::StorageConfig::S3 { .. } => "s3",
@@ -525,7 +524,6 @@ impl Handler {
                     results.push(RespValue::BulkString(Some("storage-backend".to_string())));
                     let backend = match &self.config.storage {
                         crate::config::StorageConfig::Memory => "memory",
-                        #[cfg(feature = "lmdb-backend")]
                         crate::config::StorageConfig::Lmdb { .. } => "lmdb",
                         #[cfg(feature = "s3-backend")]
                         crate::config::StorageConfig::S3 { .. } => "s3",

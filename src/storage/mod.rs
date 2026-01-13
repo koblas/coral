@@ -17,7 +17,6 @@ impl StorageFactory {
         Box::new(memory::MemoryStorage::new())
     }
 
-    #[cfg(feature = "lmdb-backend")]
     pub async fn create_lmdb<P: AsRef<std::path::Path>>(path: P) -> Result<Box<dyn StorageBackend>, StorageError> {
         Ok(Box::new(lmdb::LmdbStorage::new(path)?))
     }

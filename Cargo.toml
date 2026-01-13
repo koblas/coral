@@ -19,17 +19,15 @@ opentelemetry = "0.21"
 opentelemetry-prometheus = "0.14"
 opentelemetry_sdk = { version = "0.21", features = ["metrics"] }
 prometheus = "0.13"
-# LMDB backend
-lmdb = { version = "0.8", optional = true }
-# S3 backend  
+# LMDB backend (always included)
+lmdb = "0.8"
+# S3 backend
 aws-sdk-s3 = { version = "1.0", optional = true }
 aws-config = { version = "1.0", optional = true }
 uuid = { version = "1.0", optional = true }
 
 [features]
-default = ["memory"]
-memory = []
-lmdb-backend = ["lmdb"]
+default = []
 s3-backend = ["aws-sdk-s3", "aws-config", "uuid"]
 
 [dev-dependencies]

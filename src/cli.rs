@@ -53,7 +53,6 @@ pub enum StorageBackend {
     /// In-memory storage (default, fast but not persistent)
     Memory,
     /// LMDB storage (persistent, ACID transactions)
-    #[cfg(feature = "lmdb-backend")]
     Lmdb,
     /// AWS S3 storage (cloud-based, highly scalable)
     #[cfg(feature = "s3-backend")]
@@ -64,7 +63,6 @@ impl std::fmt::Display for StorageBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             StorageBackend::Memory => write!(f, "memory"),
-            #[cfg(feature = "lmdb-backend")]
             StorageBackend::Lmdb => write!(f, "lmdb"),
             #[cfg(feature = "s3-backend")]
             StorageBackend::S3 => write!(f, "s3"),
@@ -81,7 +79,6 @@ impl Cli {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), String> {
         match self.storage {
-            #[cfg(feature = "lmdb-backend")]
             StorageBackend::Lmdb => {
                 if self.lmdb_path.is_none() {
                     return Err("LMDB path is required when using LMDB backend".to_string());
@@ -111,7 +108,6 @@ impl Cli {
 
         let storage_config = match self.storage {
             StorageBackend::Memory => StorageConfig::Memory,
-            #[cfg(feature = "lmdb-backend")]
             StorageBackend::Lmdb => StorageConfig::Lmdb {
                 path: self.lmdb_path.clone().expect("LMDB path should be validated"),
             },
@@ -135,14 +131,11 @@ impl Cli {
         println!("  # Start with memory backend (default)");
         println!("  {} --storage memory", env!("CARGO_PKG_NAME"));
         println!();
-        
-        #[cfg(feature = "lmdb-backend")]
-        {
-            println!("  # Start with LMDB backend");
-            println!("  {} --storage lmdb --lmdb-path ./data.lmdb", env!("CARGO_PKG_NAME"));
-            println!();
-        }
-        
+
+        println!("  # Start with LMDB backend");
+        println!("  {} --storage lmdb --lmdb-path ./data.lmdb", env!("CARGO_PKG_NAME"));
+        println!();
+
         #[cfg(feature = "s3-backend")]
         {
             println!("  # Start with S3 backend");

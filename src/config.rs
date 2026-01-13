@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-#[cfg(feature = "lmdb-backend")]
 use std::path::PathBuf;
 
 /// Main configuration combining server and storage settings.
@@ -22,8 +21,7 @@ pub struct ServerConfig {
 #[serde(tag = "backend", rename_all = "lowercase")]
 pub enum StorageConfig {
     Memory,
-    #[cfg(feature = "lmdb-backend")]
-    Lmdb { 
+    Lmdb {
         path: PathBuf,
     },
     #[cfg(feature = "s3-backend")]
@@ -64,12 +62,11 @@ impl Config {
         // Storage backend selection from environment
         match std::env::var("STORAGE_BACKEND").as_deref() {
             Ok("memory") => config.storage = StorageConfig::Memory,
-            #[cfg(feature = "lmdb-backend")]
             Ok("lmdb") => {
                 let path = std::env::var("LMDB_PATH")
                     .unwrap_or_else(|_| "./data.lmdb".to_string());
-                config.storage = StorageConfig::Lmdb { 
-                    path: PathBuf::from(path) 
+                config.storage = StorageConfig::Lmdb {
+                    path: PathBuf::from(path)
                 };
             },
             #[cfg(feature = "s3-backend")]
