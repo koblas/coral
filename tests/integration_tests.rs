@@ -1,4 +1,5 @@
 use coral_redis::{Handler, RespValue, StorageBackend};
+use coral_redis::config::Config;
 use coral_redis::storage::memory::MemoryStorage;
 use std::sync::Arc;
 
@@ -139,5 +140,52 @@ async fn test_protocol_error_recovery() {
             }
         }
         _ => panic!("Expected Array"),
+    }
+}
+
+#[tokio::test]
+async fn test_config_get_integration() {
+    let storage: Arc<dyn StorageBackend> = Arc::new(MemoryStorage::new());
+    let config = Arc::new(Config::default());
+    let mut handler = Handler::new_with_config(storage, config);
+
+    // Test CONFIG GET port
+    let response = handler.handle_command(
+        RespValue::Array(Some(vec![
+            RespValue::BulkString(Some("CONFIG".to_string())),
+            RespValue::BulkString(Some("GET".to_string())),
+            RespValue::BulkString(Some("port".to_string())),
+        ]))
+    ).await;
+
+    match response {
+        RespValue::Array(Some(items)) => {
+            assert_eq!(items.len(), 2);
+            match (&items[0], &items[1]) {
+                (RespValue::BulkString(Some(key)), RespValue::BulkString(Some(value))) => {
+                    assert_eq!(key, "port");
+                    assert_eq!(value, "6379");
+                },
+                _ => panic!("Expected BulkString pairs"),
+            }
+        },
+        _ => panic!("Expected Array response"),
+    }
+
+    // Test CONFIG GET with multiple parameters
+    let response = handler.handle_command(
+        RespValue::Array(Some(vec![
+            RespValue::BulkString(Some("CONFIG".to_string())),
+            RespValue::BulkString(Some("GET".to_string())),
+            RespValue::BulkString(Some("port".to_string())),
+            RespValue::BulkString(Some("bind".to_string())),
+        ]))
+    ).await;
+
+    match response {
+        RespValue::Array(Some(items)) => {
+            assert_eq!(items.len(), 4); // 2 key-value pairs
+        },
+        _ => panic!("Expected Array response"),
     }
 }

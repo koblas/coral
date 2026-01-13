@@ -57,6 +57,7 @@ cargo build --release
 | `COMMAND`    | Get command info              | ✅     |
 | `HELLO`      | Protocol negotiation (RESP3)  | ✅     |
 | `SET ... EX` | Set with expiration           | ✅     |
+| `CONFIG GET` | Get configuration parameters  | ✅     |
 
 ### Protocol Support
 
@@ -96,7 +97,38 @@ telnet localhost 6379
 > GET mykey
 $7
 myvalue
+> CONFIG GET port
+*2
+$4
+port
+$4
+6379
 ```
+
+### Configuration Management
+
+The `CONFIG GET` command allows querying server configuration parameters:
+
+```bash
+# Get single parameter
+CONFIG GET port
+
+# Get multiple parameters
+CONFIG GET port bind
+
+# Get all parameters with wildcard
+CONFIG GET *
+```
+
+**Supported Parameters:**
+- `port` - Server port number
+- `bind` / `host` - Server bind address
+- `storage-backend` - Active storage backend (memory/lmdb/s3)
+- `maxmemory` - Maximum memory (0 = unlimited)
+- `maxmemory-policy` - Eviction policy (noeviction)
+- `save` - Persistence snapshot settings
+- `appendonly` - AOF persistence status (no)
+- `databases` - Number of databases (1)
 
 ## ⚙️ Configuration
 
@@ -211,9 +243,9 @@ cargo bench
 
 ### Test Coverage
 
-- **Unit Tests**: 60 tests covering RESP2/RESP3 protocol, inline commands, storage backends, and command handlers
-- **Integration Tests**: 4 end-to-end tests including protocol error recovery
-- **Coverage**: Comprehensive testing of core functionality, RESP3 types, and error handling
+- **Unit Tests**: 69 tests covering RESP2/RESP3 protocol, inline commands, storage backends, and command handlers
+- **Integration Tests**: 5 end-to-end tests including protocol error recovery and CONFIG command
+- **Coverage**: Comprehensive testing of core functionality, RESP3 types, CONFIG command, and error handling
 
 ## 🏛️ Architecture
 

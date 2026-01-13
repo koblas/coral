@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "lmdb-backend")]
+use std::path::PathBuf;
 
 /// Main configuration combining server and storage settings.
 ///

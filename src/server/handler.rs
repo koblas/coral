@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::metrics::{Metrics, Timer};
 use crate::protocol::{ProtocolVersion, RespParser, RespValue};
 use crate::storage::StorageBackend;
@@ -14,20 +15,37 @@ use tracing::{debug, warn};
 pub struct Handler {
     storage: Arc<dyn StorageBackend>,
     protocol_version: ProtocolVersion,
+    config: Arc<Config>,
 }
 
 impl Handler {
     /// Create a new handler with the given storage backend.
-    /// Defaults to RESP2 protocol.
+    /// Defaults to RESP2 protocol and default config.
     pub fn new(storage: Arc<dyn StorageBackend>) -> Self {
-        Self::new_with_protocol(storage, ProtocolVersion::default())
+        Self::new_with_config(storage, Arc::new(Config::default()))
+    }
+
+    /// Create a new handler with storage backend and config.
+    /// Defaults to RESP2 protocol.
+    pub fn new_with_config(storage: Arc<dyn StorageBackend>, config: Arc<Config>) -> Self {
+        Self::new_with_protocol_and_config(storage, ProtocolVersion::default(), config)
     }
 
     /// Create a new handler with specified protocol version.
     pub fn new_with_protocol(storage: Arc<dyn StorageBackend>, protocol_version: ProtocolVersion) -> Self {
+        Self::new_with_protocol_and_config(storage, protocol_version, Arc::new(Config::default()))
+    }
+
+    /// Create a new handler with all parameters.
+    pub fn new_with_protocol_and_config(
+        storage: Arc<dyn StorageBackend>,
+        protocol_version: ProtocolVersion,
+        config: Arc<Config>,
+    ) -> Self {
         Self {
             storage,
             protocol_version,
+            config,
         }
     }
 
@@ -125,6 +143,7 @@ impl Handler {
                     "flushdb" => self.handle_flushdb().await,
                     "command" => self.handle_command_info().await,
                     "hello" => self.handle_hello(&parts[1..]).await,
+                    "config" => self.handle_config(&parts[1..]).await,
                     _ => {
                         metrics.record_error("unknown_command", Some(cmd_str));
                         RespValue::Error(format!("Unknown command: {}", cmd_str))
@@ -196,6 +215,10 @@ impl Handler {
                 if bytes[0] | 0x20 == b'd' && bytes[1] | 0x20 == b'b' && bytes[2] | 0x20 == b's'
                     && bytes[3] | 0x20 == b'i' && bytes[4] | 0x20 == b'z' && bytes[5] | 0x20 == b'e' {
                     return "dbsize";
+                }
+                if bytes[0] | 0x20 == b'c' && bytes[1] | 0x20 == b'o' && bytes[2] | 0x20 == b'n'
+                    && bytes[3] | 0x20 == b'f' && bytes[4] | 0x20 == b'i' && bytes[5] | 0x20 == b'g' {
+                    return "config";
                 }
                 cmd
             },
@@ -408,6 +431,126 @@ impl Handler {
     async fn handle_command_info(&self) -> RespValue {
         // Return empty array for COMMAND (Redis clients sometimes call this)
         RespValue::Array(Some(vec![]))
+    }
+
+    /// Handle CONFIG command for configuration management.
+    /// Format: CONFIG GET parameter [parameter ...]
+    /// Currently supports GET subcommand only.
+    async fn handle_config(&self, args: &[RespValue]) -> RespValue {
+        if args.is_empty() {
+            return RespValue::Error("Wrong number of arguments for CONFIG".to_string());
+        }
+
+        let subcommand = match &args[0] {
+            RespValue::BulkString(Some(cmd)) => cmd,
+            _ => return RespValue::Error("Invalid CONFIG subcommand".to_string()),
+        };
+
+        // Only support CONFIG GET for now
+        if !subcommand.eq_ignore_ascii_case("GET") {
+            return RespValue::Error(format!(
+                "Unknown CONFIG subcommand: {}. Supported: GET",
+                subcommand
+            ));
+        }
+
+        // CONFIG GET requires at least one parameter
+        if args.len() < 2 {
+            return RespValue::Error("Wrong number of arguments for CONFIG GET".to_string());
+        }
+
+        // Collect all requested parameters
+        let mut results = Vec::new();
+
+        for arg in &args[1..] {
+            let param = match arg {
+                RespValue::BulkString(Some(p)) => p,
+                _ => continue,
+            };
+
+            // Match configuration parameters
+            // Using lowercase comparison for case-insensitivity
+            let param_lower = param.to_lowercase();
+            match param_lower.as_str() {
+                "port" => {
+                    results.push(RespValue::BulkString(Some("port".to_string())));
+                    results.push(RespValue::BulkString(Some(self.config.server.port.to_string())));
+                }
+                "bind" | "host" => {
+                    results.push(RespValue::BulkString(Some("bind".to_string())));
+                    results.push(RespValue::BulkString(Some(self.config.server.host.clone())));
+                }
+                "storage" | "storage-backend" => {
+                    results.push(RespValue::BulkString(Some("storage-backend".to_string())));
+                    let backend = match &self.config.storage {
+                        crate::config::StorageConfig::Memory => "memory",
+                        #[cfg(feature = "lmdb-backend")]
+                        crate::config::StorageConfig::Lmdb { .. } => "lmdb",
+                        #[cfg(feature = "s3-backend")]
+                        crate::config::StorageConfig::S3 { .. } => "s3",
+                    };
+                    results.push(RespValue::BulkString(Some(backend.to_string())));
+                }
+                "maxmemory" => {
+                    // Return 0 for unlimited (standard Redis behavior)
+                    results.push(RespValue::BulkString(Some("maxmemory".to_string())));
+                    results.push(RespValue::BulkString(Some("0".to_string())));
+                }
+                "maxmemory-policy" => {
+                    // Default policy for Coral Redis
+                    results.push(RespValue::BulkString(Some("maxmemory-policy".to_string())));
+                    results.push(RespValue::BulkString(Some("noeviction".to_string())));
+                }
+                "save" => {
+                    // No persistence snapshots in Coral Redis by default
+                    results.push(RespValue::BulkString(Some("save".to_string())));
+                    results.push(RespValue::BulkString(Some("".to_string())));
+                }
+                "appendonly" => {
+                    // AOF not supported
+                    results.push(RespValue::BulkString(Some("appendonly".to_string())));
+                    results.push(RespValue::BulkString(Some("no".to_string())));
+                }
+                "databases" => {
+                    // Single database in Coral Redis
+                    results.push(RespValue::BulkString(Some("databases".to_string())));
+                    results.push(RespValue::BulkString(Some("1".to_string())));
+                }
+                "*" => {
+                    // Wildcard - return all supported parameters
+                    results.push(RespValue::BulkString(Some("port".to_string())));
+                    results.push(RespValue::BulkString(Some(self.config.server.port.to_string())));
+                    results.push(RespValue::BulkString(Some("bind".to_string())));
+                    results.push(RespValue::BulkString(Some(self.config.server.host.clone())));
+                    results.push(RespValue::BulkString(Some("storage-backend".to_string())));
+                    let backend = match &self.config.storage {
+                        crate::config::StorageConfig::Memory => "memory",
+                        #[cfg(feature = "lmdb-backend")]
+                        crate::config::StorageConfig::Lmdb { .. } => "lmdb",
+                        #[cfg(feature = "s3-backend")]
+                        crate::config::StorageConfig::S3 { .. } => "s3",
+                    };
+                    results.push(RespValue::BulkString(Some(backend.to_string())));
+                    results.push(RespValue::BulkString(Some("maxmemory".to_string())));
+                    results.push(RespValue::BulkString(Some("0".to_string())));
+                    results.push(RespValue::BulkString(Some("maxmemory-policy".to_string())));
+                    results.push(RespValue::BulkString(Some("noeviction".to_string())));
+                    results.push(RespValue::BulkString(Some("save".to_string())));
+                    results.push(RespValue::BulkString(Some("".to_string())));
+                    results.push(RespValue::BulkString(Some("appendonly".to_string())));
+                    results.push(RespValue::BulkString(Some("no".to_string())));
+                    results.push(RespValue::BulkString(Some("databases".to_string())));
+                    results.push(RespValue::BulkString(Some("1".to_string())));
+                }
+                _ => {
+                    // Unknown parameter - Redis returns empty for unknown params
+                    // Don't add anything to results
+                }
+            }
+        }
+
+        // Return array of key-value pairs
+        RespValue::Array(Some(results))
     }
 
     /// Handle HELLO command for protocol negotiation.
@@ -750,5 +893,186 @@ mod tests {
 
         // Verify protocol version unchanged (still default RESP2)
         assert_eq!(handler.protocol_version(), ProtocolVersion::Resp2);
+    }
+
+    #[tokio::test]
+    async fn test_config_get_port() {
+        let handler = create_handler();
+
+        let args = vec![
+            RespValue::BulkString(Some("GET".to_string())),
+            RespValue::BulkString(Some("port".to_string())),
+        ];
+        let result = handler.handle_config(&args).await;
+
+        match result {
+            RespValue::Array(Some(items)) => {
+                assert_eq!(items.len(), 2);
+                match (&items[0], &items[1]) {
+                    (RespValue::BulkString(Some(key)), RespValue::BulkString(Some(value))) => {
+                        assert_eq!(key, "port");
+                        assert_eq!(value, "6379");
+                    },
+                    _ => panic!("Expected BulkString pairs"),
+                }
+            },
+            _ => panic!("Expected Array response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_get_bind() {
+        let handler = create_handler();
+
+        let args = vec![
+            RespValue::BulkString(Some("GET".to_string())),
+            RespValue::BulkString(Some("bind".to_string())),
+        ];
+        let result = handler.handle_config(&args).await;
+
+        match result {
+            RespValue::Array(Some(items)) => {
+                assert_eq!(items.len(), 2);
+                match (&items[0], &items[1]) {
+                    (RespValue::BulkString(Some(key)), RespValue::BulkString(Some(value))) => {
+                        assert_eq!(key, "bind");
+                        assert_eq!(value, "127.0.0.1");
+                    },
+                    _ => panic!("Expected BulkString pairs"),
+                }
+            },
+            _ => panic!("Expected Array response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_get_multiple() {
+        let handler = create_handler();
+
+        let args = vec![
+            RespValue::BulkString(Some("GET".to_string())),
+            RespValue::BulkString(Some("port".to_string())),
+            RespValue::BulkString(Some("bind".to_string())),
+        ];
+        let result = handler.handle_config(&args).await;
+
+        match result {
+            RespValue::Array(Some(items)) => {
+                assert_eq!(items.len(), 4); // 2 key-value pairs
+            },
+            _ => panic!("Expected Array response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_get_storage_backend() {
+        let handler = create_handler();
+
+        let args = vec![
+            RespValue::BulkString(Some("GET".to_string())),
+            RespValue::BulkString(Some("storage-backend".to_string())),
+        ];
+        let result = handler.handle_config(&args).await;
+
+        match result {
+            RespValue::Array(Some(items)) => {
+                assert_eq!(items.len(), 2);
+                match (&items[0], &items[1]) {
+                    (RespValue::BulkString(Some(key)), RespValue::BulkString(Some(value))) => {
+                        assert_eq!(key, "storage-backend");
+                        assert_eq!(value, "memory");
+                    },
+                    _ => panic!("Expected BulkString pairs"),
+                }
+            },
+            _ => panic!("Expected Array response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_get_unknown_param() {
+        let handler = create_handler();
+
+        let args = vec![
+            RespValue::BulkString(Some("GET".to_string())),
+            RespValue::BulkString(Some("unknown-param".to_string())),
+        ];
+        let result = handler.handle_config(&args).await;
+
+        // Unknown params should return empty array (Redis behavior)
+        match result {
+            RespValue::Array(Some(items)) => {
+                assert_eq!(items.len(), 0);
+            },
+            _ => panic!("Expected empty Array response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_get_wildcard() {
+        let handler = create_handler();
+
+        let args = vec![
+            RespValue::BulkString(Some("GET".to_string())),
+            RespValue::BulkString(Some("*".to_string())),
+        ];
+        let result = handler.handle_config(&args).await;
+
+        // Wildcard should return all parameters
+        match result {
+            RespValue::Array(Some(items)) => {
+                assert!(items.len() >= 10); // At least 5 key-value pairs
+            },
+            _ => panic!("Expected Array response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_no_args() {
+        let handler = create_handler();
+
+        let result = handler.handle_config(&[]).await;
+
+        match result {
+            RespValue::Error(_) => {},
+            _ => panic!("Expected Error for no arguments"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_invalid_subcommand() {
+        let handler = create_handler();
+
+        let args = vec![
+            RespValue::BulkString(Some("SET".to_string())),
+            RespValue::BulkString(Some("port".to_string())),
+            RespValue::BulkString(Some("8080".to_string())),
+        ];
+        let result = handler.handle_config(&args).await;
+
+        match result {
+            RespValue::Error(msg) => {
+                assert!(msg.contains("Unknown CONFIG subcommand"));
+            },
+            _ => panic!("Expected Error for unsupported subcommand"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_config_get_case_insensitive() {
+        let handler = create_handler();
+
+        let args = vec![
+            RespValue::BulkString(Some("get".to_string())),
+            RespValue::BulkString(Some("PORT".to_string())),
+        ];
+        let result = handler.handle_config(&args).await;
+
+        match result {
+            RespValue::Array(Some(items)) => {
+                assert_eq!(items.len(), 2);
+            },
+            _ => panic!("Expected Array response"),
+        }
     }
 }

@@ -63,13 +63,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(&bind_addr).await?;
     info!("Redis server listening on {}", bind_addr);
 
+    let config = Arc::new(config);
+
     loop {
         let (socket, addr) = listener.accept().await?;
         let storage_clone = Arc::clone(&storage);
+        let config_clone = Arc::clone(&config);
 
         tokio::spawn(async move {
             info!("New connection from {}", addr);
-            if let Err(e) = handle_connection(socket, storage_clone).await {
+            if let Err(e) = handle_connection(socket, storage_clone, config_clone).await {
                 error!("Error handling connection: {}", e);
             }
         });
@@ -98,7 +101,8 @@ async fn create_storage_backend(config: &StorageConfig) -> Result<Arc<dyn storag
 async fn handle_connection(
     mut socket: TcpStream,
     storage: Arc<dyn storage::StorageBackend>,
+    config: Arc<Config>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut handler = Handler::new(storage);
+    let mut handler = Handler::new_with_config(storage, config);
     handler.handle_stream(&mut socket).await
 }
