@@ -19,7 +19,9 @@ impl From<&StorageValue> for SerializableStorageValue {
         Self {
             data: value.data.clone(),
             expires_at_ms: value.expires_at.and_then(|t| {
-                t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as u64)
+                t.duration_since(UNIX_EPOCH)
+                    .ok()
+                    .map(|d| d.as_millis() as u64)
             }),
         }
     }
@@ -29,9 +31,9 @@ impl From<SerializableStorageValue> for StorageValue {
     fn from(value: SerializableStorageValue) -> Self {
         Self {
             data: value.data,
-            expires_at: value.expires_at_ms.map(|ms| {
-                UNIX_EPOCH + Duration::from_millis(ms)
-            }),
+            expires_at: value
+                .expires_at_ms
+                .map(|ms| UNIX_EPOCH + Duration::from_millis(ms)),
         }
     }
 }
@@ -56,9 +58,12 @@ impl LmdbStorage {
     /// # Note
     /// On 64-bit systems, this is just address space reservation and doesn't
     /// consume actual memory or disk space until data is written.
-    pub fn new_with_map_size<P: AsRef<Path>>(path: P, map_size: usize) -> Result<Self, StorageError> {
+    pub fn new_with_map_size<P: AsRef<Path>>(
+        path: P,
+        map_size: usize,
+    ) -> Result<Self, StorageError> {
         let env = lmdb::Environment::new()
-            .set_flags(lmdb::EnvironmentFlags::NO_SUB_DIR)
+            .set_flags(lmdb::EnvironmentFlags::NO_SUB_DIR | lmdb::EnvironmentFlags::NO_SYNC)
             .set_max_dbs(1)
             .set_map_size(map_size)
             .open(path.as_ref())?;
@@ -86,7 +91,12 @@ impl StorageBackend for LmdbStorage {
         Ok(())
     }
 
-    async fn set_with_expiry(&self, key: &str, value: &str, ttl: Duration) -> Result<(), StorageError> {
+    async fn set_with_expiry(
+        &self,
+        key: &str,
+        value: &str,
+        ttl: Duration,
+    ) -> Result<(), StorageError> {
         let storage_value = StorageValue::new_with_expiry(value.to_owned(), ttl);
         let serializable = SerializableStorageValue::from(&storage_value);
         let serialized = serde_json::to_vec(&serializable)?;
@@ -139,8 +149,60 @@ impl StorageBackend for LmdbStorage {
         }
     }
 
+    async fn delete_many(&self, keys: &[&str]) -> Result<usize, StorageError> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+
+        let mut txn = self.env.begin_rw_txn()?;
+        let mut count = 0;
+
+        for key in keys {
+            match txn.del(self.db, key, None) {
+                Ok(()) => count += 1,
+                Err(lmdb::Error::NotFound) => {}
+                Err(e) => {
+                    txn.abort();
+                    return Err(e.into());
+                }
+            }
+        }
+
+        txn.commit()?;
+        Ok(count)
+    }
+
     async fn exists(&self, key: &str) -> Result<bool, StorageError> {
-        Ok(self.get(key).await?.is_some())
+        let (exists, is_expired) = {
+            let txn = self.env.begin_ro_txn()?;
+
+            match Transaction::get(&txn, self.db, &key) {
+                Ok(bytes) => {
+                    let serializable: SerializableStorageValue = serde_json::from_slice(bytes)?;
+                    let storage_value = StorageValue::from(serializable);
+
+                    if storage_value.is_expired() {
+                        (false, true)
+                    } else {
+                        (true, false)
+                    }
+                }
+                Err(lmdb::Error::NotFound) => (false, false),
+                Err(e) => {
+                    return Err(StorageError::OperationFailed(format!(
+                        "Exists error: {}",
+                        e
+                    )))
+                }
+            }
+        };
+
+        if is_expired {
+            // Clean up expired key after transaction is dropped
+            self.delete(key).await?;
+        }
+
+        Ok(exists)
     }
 
     async fn keys_count(&self) -> Result<usize, StorageError> {

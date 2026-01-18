@@ -37,7 +37,10 @@ mod tests {
         assert_eq!(detect_format(b"+OK\r\n"), Some(ProtocolFormat::Resp));
         assert_eq!(detect_format(b"-Error\r\n"), Some(ProtocolFormat::Resp));
         assert_eq!(detect_format(b":42\r\n"), Some(ProtocolFormat::Resp));
-        assert_eq!(detect_format(b"$5\r\nhello\r\n"), Some(ProtocolFormat::Resp));
+        assert_eq!(
+            detect_format(b"$5\r\nhello\r\n"),
+            Some(ProtocolFormat::Resp)
+        );
         assert_eq!(detect_format(b"*2\r\n"), Some(ProtocolFormat::Resp));
     }
 
@@ -53,8 +56,14 @@ mod tests {
     #[test]
     fn test_detect_inline() {
         assert_eq!(detect_format(b"PING\r\n"), Some(ProtocolFormat::Inline));
-        assert_eq!(detect_format(b"SET key value\r\n"), Some(ProtocolFormat::Inline));
-        assert_eq!(detect_format(b"GET mykey\r\n"), Some(ProtocolFormat::Inline));
+        assert_eq!(
+            detect_format(b"SET key value\r\n"),
+            Some(ProtocolFormat::Inline)
+        );
+        assert_eq!(
+            detect_format(b"GET mykey\r\n"),
+            Some(ProtocolFormat::Inline)
+        );
     }
 
     #[test]

@@ -27,10 +27,7 @@ async fn main() -> Result<(), AppError> {
     let config = Config::from_sources(&cli)?;
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
 
-    info!(
-        "Starting Coral Redis Server v{}",
-        env!("CARGO_PKG_VERSION")
-    );
+    info!("Starting Coral Redis Server v{}", env!("CARGO_PKG_VERSION"));
 
     let telemetry_config = TelemetryConfig {
         enable_metrics: true,

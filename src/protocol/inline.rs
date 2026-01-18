@@ -25,8 +25,12 @@ impl InlineParser {
         let line_data = &buffer[0..end_pos];
 
         // Convert to string without allocating a vec
-        let line = std::str::from_utf8(line_data)
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid UTF-8 in inline command"))?;
+        let line = std::str::from_utf8(line_data).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid UTF-8 in inline command",
+            )
+        })?;
 
         // Parse the command line
         let parts = Self::parse_command_line(line)?;
@@ -134,7 +138,9 @@ mod tests {
 
     #[test]
     fn test_command_with_args() {
-        let result = InlineParser::parse(b"SET mykey myvalue\r\n").unwrap().unwrap();
+        let result = InlineParser::parse(b"SET mykey myvalue\r\n")
+            .unwrap()
+            .unwrap();
         match result {
             RespValue::Array(Some(parts)) => {
                 assert_eq!(parts.len(), 3);
@@ -178,12 +184,10 @@ mod tests {
             .unwrap()
             .unwrap();
         match result {
-            RespValue::Array(Some(parts)) => {
-                match &parts[2] {
-                    RespValue::BulkString(Some(s)) => assert_eq!(s, "line1\nline2"),
-                    _ => panic!("Expected BulkString"),
-                }
-            }
+            RespValue::Array(Some(parts)) => match &parts[2] {
+                RespValue::BulkString(Some(s)) => assert_eq!(s, "line1\nline2"),
+                _ => panic!("Expected BulkString"),
+            },
             _ => panic!("Expected Array"),
         }
     }
@@ -202,7 +206,9 @@ mod tests {
 
     #[test]
     fn test_multiple_spaces() {
-        let result = InlineParser::parse(b"SET   key    value\r\n").unwrap().unwrap();
+        let result = InlineParser::parse(b"SET   key    value\r\n")
+            .unwrap()
+            .unwrap();
         match result {
             RespValue::Array(Some(parts)) => {
                 assert_eq!(parts.len(), 3);
@@ -213,7 +219,9 @@ mod tests {
 
     #[test]
     fn test_tabs() {
-        let result = InlineParser::parse(b"SET\tkey\tvalue\r\n").unwrap().unwrap();
+        let result = InlineParser::parse(b"SET\tkey\tvalue\r\n")
+            .unwrap()
+            .unwrap();
         match result {
             RespValue::Array(Some(parts)) => {
                 assert_eq!(parts.len(), 3);

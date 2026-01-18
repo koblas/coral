@@ -33,7 +33,9 @@ fn default_port() -> u16 {
 #[serde(tag = "backend", rename_all = "lowercase")]
 pub enum StorageConfig {
     Memory,
-    Lmdb { path: PathBuf },
+    Lmdb {
+        path: PathBuf,
+    },
     #[cfg(feature = "s3-backend")]
     S3 {
         bucket: String,
@@ -108,11 +110,7 @@ impl Config {
     pub fn from_sources(cli: &Cli) -> Result<Self, ConfigError> {
         let env_config = Self::from_env()?;
 
-        let file_config = cli
-            .config
-            .as_ref()
-            .map(Self::load_from_file)
-            .transpose()?;
+        let file_config = cli.config.as_ref().map(Self::load_from_file).transpose()?;
 
         let server = ServerConfig {
             host: cli

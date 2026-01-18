@@ -1,6 +1,8 @@
 use super::{StorageBackend, StorageError, StorageValue};
 use async_trait::async_trait;
 use papaya::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// In-memory storage backend using concurrent hashmap.
@@ -10,6 +12,7 @@ use std::time::Duration;
 /// Built on papaya for high-performance concurrent access.
 pub struct MemoryStorage {
     data: HashMap<String, StorageValue>,
+    approximate_count: Arc<AtomicUsize>,
 }
 
 impl Default for MemoryStorage {
@@ -20,8 +23,50 @@ impl Default for MemoryStorage {
 
 impl MemoryStorage {
     pub fn new() -> Self {
+        Self::new_with_cleanup_interval(Duration::from_secs(60))
+    }
+
+    pub fn new_with_cleanup_interval(cleanup_interval: Duration) -> Self {
+        let data = HashMap::new();
+        let approximate_count = Arc::new(AtomicUsize::new(0));
+
+        // Spawn background cleanup task
+        let data_clone = data.clone();
+        let count_clone = Arc::clone(&approximate_count);
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(cleanup_interval);
+            loop {
+                interval.tick().await;
+                Self::cleanup_expired(&data_clone, &count_clone);
+            }
+        });
+
         Self {
-            data: HashMap::new(),
+            data,
+            approximate_count,
+        }
+    }
+
+    fn cleanup_expired(data: &HashMap<String, StorageValue>, count: &AtomicUsize) {
+        let mut to_remove = Vec::new();
+
+        {
+            let guard = data.pin();
+            for (key, value) in guard.iter() {
+                if value.is_expired() {
+                    to_remove.push(key.clone());
+                }
+            }
+        }
+
+        if !to_remove.is_empty() {
+            let guard = data.pin();
+            for key in &to_remove {
+                if guard.remove(key).is_some() {
+                    count.fetch_sub(1, Ordering::Relaxed);
+                }
+            }
         }
     }
 }
@@ -30,13 +75,31 @@ impl MemoryStorage {
 impl StorageBackend for MemoryStorage {
     async fn set(&self, key: &str, value: &str) -> Result<(), StorageError> {
         let guard = self.data.pin();
+        let is_new = guard.get(key).is_none();
         guard.insert(key.to_owned(), StorageValue::new(value.to_owned()));
+
+        if is_new {
+            self.approximate_count.fetch_add(1, Ordering::Relaxed);
+        }
         Ok(())
     }
 
-    async fn set_with_expiry(&self, key: &str, value: &str, ttl: Duration) -> Result<(), StorageError> {
+    async fn set_with_expiry(
+        &self,
+        key: &str,
+        value: &str,
+        ttl: Duration,
+    ) -> Result<(), StorageError> {
         let guard = self.data.pin();
-        guard.insert(key.to_owned(), StorageValue::new_with_expiry(value.to_owned(), ttl));
+        let is_new = guard.get(key).is_none();
+        guard.insert(
+            key.to_owned(),
+            StorageValue::new_with_expiry(value.to_owned(), ttl),
+        );
+
+        if is_new {
+            self.approximate_count.fetch_add(1, Ordering::Relaxed);
+        }
         Ok(())
     }
 
@@ -48,7 +111,9 @@ impl StorageBackend for MemoryStorage {
                 // Drop guard before removing to avoid holding reference
                 drop(guard);
                 let remove_guard = self.data.pin();
-                remove_guard.remove(key);
+                if remove_guard.remove(key).is_some() {
+                    self.approximate_count.fetch_sub(1, Ordering::Relaxed);
+                }
                 Ok(None)
             } else {
                 Ok(Some(entry.data.clone()))
@@ -60,7 +125,12 @@ impl StorageBackend for MemoryStorage {
 
     async fn delete(&self, key: &str) -> Result<bool, StorageError> {
         let guard = self.data.pin();
-        Ok(guard.remove(key).is_some())
+        let existed = guard.remove(key).is_some();
+
+        if existed {
+            self.approximate_count.fetch_sub(1, Ordering::Relaxed);
+        }
+        Ok(existed)
     }
 
     async fn exists(&self, key: &str) -> Result<bool, StorageError> {
@@ -71,7 +141,9 @@ impl StorageBackend for MemoryStorage {
                 // Drop guard before removing
                 drop(guard);
                 let remove_guard = self.data.pin();
-                remove_guard.remove(key);
+                if remove_guard.remove(key).is_some() {
+                    self.approximate_count.fetch_sub(1, Ordering::Relaxed);
+                }
                 Ok(false)
             } else {
                 Ok(true)
@@ -82,33 +154,15 @@ impl StorageBackend for MemoryStorage {
     }
 
     async fn keys_count(&self) -> Result<usize, StorageError> {
-        // Count non-expired keys and collect expired ones
-        let mut count = 0;
-        let mut expired_keys = Vec::new();
-
-        {
-            let guard = self.data.pin();
-            for (key, value) in guard.iter() {
-                if value.is_expired() {
-                    expired_keys.push(key.clone());
-                } else {
-                    count += 1;
-                }
-            }
-        }
-
-        // Remove expired keys
-        let remove_guard = self.data.pin();
-        for key in expired_keys {
-            remove_guard.remove(&key);
-        }
-
-        Ok(count)
+        // Return approximate count - O(1) instead of O(n)
+        // Note: May include recently expired keys until they're accessed
+        Ok(self.approximate_count.load(Ordering::Relaxed))
     }
 
     async fn flush(&self) -> Result<(), StorageError> {
         let guard = self.data.pin();
         guard.clear();
+        self.approximate_count.store(0, Ordering::Relaxed);
         Ok(())
     }
 }

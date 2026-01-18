@@ -28,7 +28,7 @@ impl S3Storage {
     pub async fn new(bucket: String, prefix: Option<String>) -> Result<Self, StorageError> {
         let config = aws_config::load_from_env().await;
         let client = Client::new(&config);
-        
+
         Ok(Self {
             client,
             bucket,
@@ -64,7 +64,12 @@ impl StorageBackend for S3Storage {
         Ok(())
     }
 
-    async fn set_with_expiry(&self, key: &str, value: &str, ttl: Duration) -> Result<(), StorageError> {
+    async fn set_with_expiry(
+        &self,
+        key: &str,
+        value: &str,
+        ttl: Duration,
+    ) -> Result<(), StorageError> {
         let expires_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -104,7 +109,9 @@ impl StorageBackend for S3Storage {
                     .body
                     .collect()
                     .await
-                    .map_err(|e| StorageError::OperationFailed(format!("S3 body read error: {}", e)))?
+                    .map_err(|e| {
+                        StorageError::OperationFailed(format!("S3 body read error: {}", e))
+                    })?
                     .into_bytes();
 
                 let storage_value: S3StorageValue = serde_json::from_slice(&bytes)?;
@@ -115,7 +122,7 @@ impl StorageBackend for S3Storage {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
                         .as_millis() as u64;
-                    
+
                     if now > expires_at {
                         // Delete expired key
                         self.delete(key).await?;
@@ -129,14 +136,18 @@ impl StorageBackend for S3Storage {
                 if e.to_string().contains("NoSuchKey") {
                     Ok(None)
                 } else {
-                    Err(StorageError::OperationFailed(format!("S3 get error: {}", e)))
+                    Err(StorageError::OperationFailed(format!(
+                        "S3 get error: {}",
+                        e
+                    )))
                 }
             }
         }
     }
 
     async fn delete(&self, key: &str) -> Result<bool, StorageError> {
-        match self.client
+        match self
+            .client
             .delete_object()
             .bucket(&self.bucket)
             .key(self.key_path(key))
@@ -148,14 +159,18 @@ impl StorageBackend for S3Storage {
                 if e.to_string().contains("NoSuchKey") {
                     Ok(false)
                 } else {
-                    Err(StorageError::OperationFailed(format!("S3 delete error: {}", e)))
+                    Err(StorageError::OperationFailed(format!(
+                        "S3 delete error: {}",
+                        e
+                    )))
                 }
             }
         }
     }
 
     async fn exists(&self, key: &str) -> Result<bool, StorageError> {
-        match self.client
+        match self
+            .client
             .head_object()
             .bucket(&self.bucket)
             .key(self.key_path(key))
@@ -167,7 +182,10 @@ impl StorageBackend for S3Storage {
                 if e.to_string().contains("NotFound") {
                     Ok(false)
                 } else {
-                    Err(StorageError::OperationFailed(format!("S3 head error: {}", e)))
+                    Err(StorageError::OperationFailed(format!(
+                        "S3 head error: {}",
+                        e
+                    )))
                 }
             }
         }
@@ -178,7 +196,8 @@ impl StorageBackend for S3Storage {
         let mut continuation_token = None;
 
         loop {
-            let mut request = self.client
+            let mut request = self
+                .client
                 .list_objects_v2()
                 .bucket(&self.bucket)
                 .prefix(&self.prefix);
@@ -187,7 +206,9 @@ impl StorageBackend for S3Storage {
                 request = request.continuation_token(token);
             }
 
-            let output = request.send().await
+            let output = request
+                .send()
+                .await
                 .map_err(|e| StorageError::OperationFailed(format!("S3 list error: {}", e)))?;
 
             if let Some(contents) = output.contents {
@@ -210,7 +231,8 @@ impl StorageBackend for S3Storage {
         let mut keys_to_delete = Vec::new();
 
         loop {
-            let mut request = self.client
+            let mut request = self
+                .client
                 .list_objects_v2()
                 .bucket(&self.bucket)
                 .prefix(&self.prefix);
@@ -219,7 +241,9 @@ impl StorageBackend for S3Storage {
                 request = request.continuation_token(token);
             }
 
-            let output = request.send().await
+            let output = request
+                .send()
+                .await
                 .map_err(|e| StorageError::OperationFailed(format!("S3 list error: {}", e)))?;
 
             if let Some(contents) = output.contents {
@@ -239,8 +263,14 @@ impl StorageBackend for S3Storage {
 
         // Delete objects in batches (S3 allows up to 1000 per batch)
         for chunk in keys_to_delete.chunks(1000) {
-            let delete_objects: Vec<_> = chunk.iter()
-                .map(|key| aws_sdk_s3::types::ObjectIdentifier::builder().key(key).build().unwrap())
+            let delete_objects: Vec<_> = chunk
+                .iter()
+                .map(|key| {
+                    aws_sdk_s3::types::ObjectIdentifier::builder()
+                        .key(key)
+                        .build()
+                        .unwrap()
+                })
                 .collect();
 
             if !delete_objects.is_empty() {
@@ -255,7 +285,9 @@ impl StorageBackend for S3Storage {
                     .delete(delete)
                     .send()
                     .await
-                    .map_err(|e| StorageError::OperationFailed(format!("S3 batch delete error: {}", e)))?;
+                    .map_err(|e| {
+                        StorageError::OperationFailed(format!("S3 batch delete error: {}", e))
+                    })?;
             }
         }
 

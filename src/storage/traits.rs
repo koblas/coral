@@ -46,13 +46,31 @@ pub trait StorageBackend: Send + Sync {
     async fn set(&self, key: &str, value: &str) -> Result<(), StorageError>;
 
     /// Store a key-value pair with TTL expiry.
-    async fn set_with_expiry(&self, key: &str, value: &str, ttl: Duration) -> Result<(), StorageError>;
+    async fn set_with_expiry(
+        &self,
+        key: &str,
+        value: &str,
+        ttl: Duration,
+    ) -> Result<(), StorageError>;
 
     /// Retrieve a value by key. Returns None if key doesn't exist or expired.
     async fn get(&self, key: &str) -> Result<Option<String>, StorageError>;
 
     /// Delete a key. Returns true if key existed.
     async fn delete(&self, key: &str) -> Result<bool, StorageError>;
+
+    /// Delete multiple keys. Returns count of keys that existed and were deleted.
+    /// Default implementation calls delete() for each key individually.
+    /// Backends can override for more efficient batch operations.
+    async fn delete_many(&self, keys: &[&str]) -> Result<usize, StorageError> {
+        let mut count = 0;
+        for key in keys {
+            if self.delete(key).await? {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
 
     /// Check if a key exists and is not expired.
     async fn exists(&self, key: &str) -> Result<bool, StorageError>;

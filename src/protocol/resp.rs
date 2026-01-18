@@ -1,6 +1,6 @@
+use super::{detect_format, InlineParser, ProtocolFormat};
 use bytes::{Buf, BytesMut};
 use std::io;
-use super::{InlineParser, detect_format, ProtocolFormat};
 
 /// RESP (Redis Serialization Protocol) value types.
 ///
@@ -8,17 +8,17 @@ use super::{InlineParser, detect_format, ProtocolFormat};
 #[derive(Debug, Clone)]
 pub enum RespValue {
     // RESP2 types
-    SimpleString(String),           // +
-    Error(String),                  // -
-    Integer(i64),                   // :
-    BulkString(Option<String>),     // $ (None = null in RESP2)
-    Array(Option<Vec<RespValue>>),  // * (None = null in RESP2)
+    SimpleString(String),          // +
+    Error(String),                 // -
+    Integer(i64),                  // :
+    BulkString(Option<String>),    // $ (None = null in RESP2)
+    Array(Option<Vec<RespValue>>), // * (None = null in RESP2)
 
     // RESP3 types
-    Null,                          // _ (dedicated null type)
-    Boolean(bool),                 // # (true/false)
-    Double(f64),                   // , (floating point)
-    Set(Vec<RespValue>),          // ~ (unordered collection)
+    Null,                             // _ (dedicated null type)
+    Boolean(bool),                    // # (true/false)
+    Double(f64),                      // , (floating point)
+    Set(Vec<RespValue>),              // ~ (unordered collection)
     Map(Vec<(RespValue, RespValue)>), // % (key-value pairs)
 }
 
@@ -295,10 +295,12 @@ impl RespParser {
             let value = match self.buffer[0] {
                 b't' => true,
                 b'f' => false,
-                c => return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Invalid boolean value: {}", c as char),
-                )),
+                c => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Invalid boolean value: {}", c as char),
+                    ))
+                }
             };
 
             if &self.buffer[1..3] == b"\r\n" {
@@ -314,9 +316,9 @@ impl RespParser {
 
     fn parse_double(&mut self) -> Result<Option<RespValue>, io::Error> {
         if let Some(line) = self.read_line()? {
-            let num = line.parse::<f64>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "Invalid double")
-            })?;
+            let num = line
+                .parse::<f64>()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid double"))?;
             Ok(Some(RespValue::Double(num)))
         } else {
             Ok(None)
@@ -325,9 +327,9 @@ impl RespParser {
 
     fn parse_set(&mut self) -> Result<Option<RespValue>, io::Error> {
         if let Some(length_str) = self.read_line()? {
-            let length = length_str.parse::<i64>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "Invalid set length")
-            })?;
+            let length = length_str
+                .parse::<i64>()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid set length"))?;
 
             if length < 0 {
                 return Err(io::Error::new(
@@ -353,9 +355,9 @@ impl RespParser {
 
     fn parse_map(&mut self) -> Result<Option<RespValue>, io::Error> {
         if let Some(length_str) = self.read_line()? {
-            let length = length_str.parse::<i64>().map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "Invalid map length")
-            })?;
+            let length = length_str
+                .parse::<i64>()
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid map length"))?;
 
             if length < 0 {
                 return Err(io::Error::new(
@@ -435,7 +437,7 @@ mod tests {
     fn test_simple_string_parsing() {
         let mut parser = RespParser::new();
         parser.add_data(b"+OK\r\n");
-        
+
         let result = parser.parse().unwrap().unwrap();
         match result {
             RespValue::SimpleString(s) => assert_eq!(s, "OK"),
@@ -447,7 +449,7 @@ mod tests {
     fn test_integer_parsing() {
         let mut parser = RespParser::new();
         parser.add_data(b":42\r\n");
-        
+
         let result = parser.parse().unwrap().unwrap();
         match result {
             RespValue::Integer(i) => assert_eq!(i, 42),
@@ -459,7 +461,7 @@ mod tests {
     fn test_bulk_string_parsing() {
         let mut parser = RespParser::new();
         parser.add_data(b"$5\r\nhello\r\n");
-        
+
         let result = parser.parse().unwrap().unwrap();
         match result {
             RespValue::BulkString(Some(s)) => assert_eq!(s, "hello"),
@@ -471,10 +473,10 @@ mod tests {
     fn test_null_bulk_string_parsing() {
         let mut parser = RespParser::new();
         parser.add_data(b"$-1\r\n");
-        
+
         let result = parser.parse().unwrap().unwrap();
         match result {
-            RespValue::BulkString(None) => {},
+            RespValue::BulkString(None) => {}
             _ => panic!("Expected null BulkString"),
         }
     }
@@ -483,7 +485,7 @@ mod tests {
     fn test_array_parsing() {
         let mut parser = RespParser::new();
         parser.add_data(b"*2\r\n+OK\r\n:42\r\n");
-        
+
         let result = parser.parse().unwrap().unwrap();
         match result {
             RespValue::Array(Some(arr)) => {
@@ -496,7 +498,7 @@ mod tests {
                     RespValue::Integer(i) => assert_eq!(*i, 42),
                     _ => panic!("Expected Integer"),
                 }
-            },
+            }
             _ => panic!("Expected Array"),
         }
     }
@@ -505,7 +507,7 @@ mod tests {
     fn test_incomplete_data() {
         let mut parser = RespParser::new();
         parser.add_data(b"+OK");
-        
+
         let result = parser.parse().unwrap();
         assert!(result.is_none());
     }
@@ -525,15 +527,15 @@ mod tests {
     fn test_multiple_commands() {
         let mut parser = RespParser::new();
         parser.add_data(b"+OK\r\n:42\r\n");
-        
+
         let first = parser.parse().unwrap().unwrap();
         let second = parser.parse().unwrap().unwrap();
-        
+
         match first {
             RespValue::SimpleString(s) => assert_eq!(s, "OK"),
             _ => panic!("Expected SimpleString"),
         }
-        
+
         match second {
             RespValue::Integer(i) => assert_eq!(i, 42),
             _ => panic!("Expected Integer"),
@@ -577,8 +579,14 @@ mod tests {
     #[test]
     fn test_map_serialization() {
         let value = RespValue::Map(vec![
-            (RespValue::SimpleString("key1".to_string()), RespValue::Integer(1)),
-            (RespValue::SimpleString("key2".to_string()), RespValue::Integer(2)),
+            (
+                RespValue::SimpleString("key1".to_string()),
+                RespValue::Integer(1),
+            ),
+            (
+                RespValue::SimpleString("key2".to_string()),
+                RespValue::Integer(2),
+            ),
         ]);
         assert_eq!(value.to_bytes(), b"%2\r\n+key1\r\n:1\r\n+key2\r\n:2\r\n");
     }
@@ -591,7 +599,7 @@ mod tests {
 
         let result = parser.parse().unwrap().unwrap();
         match result {
-            RespValue::Null => {},
+            RespValue::Null => {}
             _ => panic!("Expected Null"),
         }
     }
@@ -603,7 +611,7 @@ mod tests {
 
         let result = parser.parse().unwrap().unwrap();
         match result {
-            RespValue::Boolean(true) => {},
+            RespValue::Boolean(true) => {}
             _ => panic!("Expected Boolean(true)"),
         }
 
@@ -612,7 +620,7 @@ mod tests {
 
         let result2 = parser2.parse().unwrap().unwrap();
         match result2 {
-            RespValue::Boolean(false) => {},
+            RespValue::Boolean(false) => {}
             _ => panic!("Expected Boolean(false)"),
         }
     }
@@ -646,7 +654,7 @@ mod tests {
                     RespValue::Integer(i) => assert_eq!(*i, 42),
                     _ => panic!("Expected Integer"),
                 }
-            },
+            }
             _ => panic!("Expected Set"),
         }
     }
@@ -664,10 +672,10 @@ mod tests {
                     (RespValue::SimpleString(k), RespValue::Integer(v)) => {
                         assert_eq!(k, "key1");
                         assert_eq!(*v, 1);
-                    },
+                    }
                     _ => panic!("Expected SimpleString key and Integer value"),
                 }
-            },
+            }
             _ => panic!("Expected Map"),
         }
     }
@@ -686,10 +694,10 @@ mod tests {
                     (RespValue::SimpleString(k), RespValue::Set(items)) => {
                         assert_eq!(k, "mykey");
                         assert_eq!(items.len(), 2);
-                    },
+                    }
                     _ => panic!("Expected SimpleString and Set"),
                 }
-            },
+            }
             _ => panic!("Expected Map"),
         }
     }
@@ -734,7 +742,7 @@ mod tests {
         parser.add_data(b"PING\r\n");
         let first = parser.parse().unwrap().unwrap();
         match first {
-            RespValue::Array(_) => {}, // Inline becomes array
+            RespValue::Array(_) => {} // Inline becomes array
             _ => panic!("Expected Array from inline"),
         }
 
@@ -742,7 +750,7 @@ mod tests {
         parser.add_data(b"*1\r\n$4\r\nPING\r\n");
         let second = parser.parse().unwrap().unwrap();
         match second {
-            RespValue::Array(_) => {},
+            RespValue::Array(_) => {}
             _ => panic!("Expected Array from RESP"),
         }
     }

@@ -35,63 +35,63 @@ impl Metrics {
     pub fn init() -> &'static Self {
         METRICS.get_or_init(|| {
             let meter = global::meter("coral-redis");
-            
+
             Metrics {
                 connections_total: meter
                     .u64_counter("coral_connections_total")
                     .with_description("Total number of client connections")
                     .init(),
-                
+
                 connections_active: meter
                     .u64_counter("coral_connections_active")
                     .with_description("Number of active client connections")
                     .init(),
-                
+
                 requests_total: meter
                     .u64_counter("coral_requests_total")
                     .with_description("Total number of requests processed")
                     .init(),
-                
+
                 request_duration: meter
                     .f64_histogram("coral_request_duration_seconds")
                     .with_description("Request processing duration in seconds")
                     .init(),
-                
+
                 errors_total: meter
                     .u64_counter("coral_errors_total")
                     .with_description("Total number of errors")
                     .init(),
-                
+
                 command_duration: meter
                     .f64_histogram("coral_command_duration_seconds")
                     .with_description("Command execution duration in seconds")
                     .init(),
-                
+
                 commands_total: meter
                     .u64_counter("coral_commands_total")
                     .with_description("Total number of commands executed")
                     .init(),
-                
+
                 storage_operations_total: meter
                     .u64_counter("coral_storage_operations_total")
                     .with_description("Total number of storage operations")
                     .init(),
-                
+
                 storage_operation_duration: meter
                     .f64_histogram("coral_storage_operation_duration_seconds")
                     .with_description("Storage operation duration in seconds")
                     .init(),
-                
+
                 storage_errors_total: meter
                     .u64_counter("coral_storage_errors_total")
                     .with_description("Total number of storage errors")
                     .init(),
-                
+
                 keys_total: meter
                     .u64_counter("coral_keys_total")
                     .with_description("Total number of keys stored")
                     .init(),
-                
+
                 expired_keys_total: meter
                     .u64_counter("coral_expired_keys_total")
                     .with_description("Total number of expired keys removed")

@@ -77,7 +77,10 @@ impl Handler {
     }
 
     /// Create a new handler with specified protocol version.
-    pub fn new_with_protocol(storage: Arc<dyn StorageBackend>, protocol_version: ProtocolVersion) -> Self {
+    pub fn new_with_protocol(
+        storage: Arc<dyn StorageBackend>,
+        protocol_version: ProtocolVersion,
+    ) -> Self {
         Self::new_with_protocol_and_config(storage, protocol_version, Arc::new(Config::default()))
     }
 
@@ -105,13 +108,10 @@ impl Handler {
     }
 
     /// Process commands from a TCP connection until it closes.
-    pub async fn handle_stream(
-        &mut self,
-        stream: &mut TcpStream,
-    ) -> Result<(), std::io::Error> {
+    pub async fn handle_stream(&mut self, stream: &mut TcpStream) -> Result<(), std::io::Error> {
         let metrics = Metrics::get();
         metrics.increment_connections();
-        
+
         let mut parser = RespParser::new();
         let mut buffer = [0; 1024];
 
@@ -253,12 +253,20 @@ impl Handler {
 
                         match result {
                             Ok(()) => {
-                                metrics.record_storage_operation("set_with_expiry", "storage", duration);
+                                metrics.record_storage_operation(
+                                    "set_with_expiry",
+                                    "storage",
+                                    duration,
+                                );
                                 metrics.record_key_operation("set", 1);
                                 return RespValue::SimpleString("OK".to_string());
                             }
                             Err(e) => {
-                                metrics.record_storage_error("set_with_expiry", "storage", "operation_failed");
+                                metrics.record_storage_error(
+                                    "set_with_expiry",
+                                    "storage",
+                                    "operation_failed",
+                                );
                                 warn!("SET with expiry failed: {}", e);
                                 return RespValue::Error(format!("SET failed: {}", e));
                             }
@@ -273,7 +281,7 @@ impl Handler {
         let timer = Timer::new();
         let result = self.storage.set(key, value).await;
         let duration = timer.elapsed_seconds();
-        
+
         match result {
             Ok(()) => {
                 metrics.record_storage_operation("set", "storage", duration);
@@ -290,7 +298,7 @@ impl Handler {
 
     async fn handle_get(&self, args: &[RespValue]) -> RespValue {
         let metrics = Metrics::get();
-        
+
         if args.len() != 1 {
             return RespValue::Error("Wrong number of arguments for GET".to_string());
         }
@@ -303,7 +311,7 @@ impl Handler {
         let timer = Timer::new();
         let result = self.storage.get(key).await;
         let duration = timer.elapsed_seconds();
-        
+
         match result {
             Ok(Some(value)) => {
                 metrics.record_storage_operation("get", "storage", duration);
@@ -323,42 +331,42 @@ impl Handler {
 
     async fn handle_del(&self, args: &[RespValue]) -> RespValue {
         let metrics = Metrics::get();
-        
+
         if args.is_empty() {
             return RespValue::Error("Wrong number of arguments for DEL".to_string());
         }
 
-        let mut deleted_count = 0;
-        for arg in args {
-            let key = match arg {
-                RespValue::BulkString(Some(k)) => k,
+        // Extract all keys, filtering out invalid ones
+        let keys: Vec<&str> = args
+            .iter()
+            .filter_map(|arg| match arg {
+                RespValue::BulkString(Some(k)) => Some(k.as_str()),
                 _ => {
                     warn!("Invalid key in DEL command");
-                    continue;
+                    None
                 }
-            };
+            })
+            .collect();
 
-            let timer = Timer::new();
-            let result = self.storage.delete(key).await;
-            let duration = timer.elapsed_seconds();
-            
-            match result {
-                Ok(true) => {
-                    metrics.record_storage_operation("delete", "storage", duration);
-                    deleted_count += 1;
-                }
-                Ok(false) => {
-                    metrics.record_storage_operation("delete", "storage", duration);
-                    // Key didn't exist, not an error
-                }
-                Err(e) => {
-                    metrics.record_storage_error("delete", "storage", "operation_failed");
-                    warn!("Failed to delete key '{}': {}", key, e);
-                }
-            }
+        if keys.is_empty() {
+            return RespValue::Integer(0);
         }
 
-        RespValue::Integer(deleted_count)
+        let timer = Timer::new();
+        let result = self.storage.delete_many(&keys).await;
+        let duration = timer.elapsed_seconds();
+
+        match result {
+            Ok(deleted_count) => {
+                metrics.record_storage_operation("delete_many", "storage", duration);
+                RespValue::Integer(deleted_count as i64)
+            }
+            Err(e) => {
+                metrics.record_storage_error("delete_many", "storage", "operation_failed");
+                warn!("Failed to delete keys: {}", e);
+                RespValue::Error(format!("DEL failed: {}", e))
+            }
+        }
     }
 
     async fn handle_exists(&self, args: &[RespValue]) -> RespValue {
@@ -378,7 +386,7 @@ impl Handler {
 
             match self.storage.exists(key).await {
                 Ok(true) => exists_count += 1,
-                Ok(false) => {},
+                Ok(false) => {}
                 Err(e) => {
                     warn!("Failed to check existence of key '{}': {}", key, e);
                 }
@@ -454,7 +462,9 @@ impl Handler {
             match param_lower.as_str() {
                 "port" => {
                     results.push(RespValue::BulkString(Some("port".to_string())));
-                    results.push(RespValue::BulkString(Some(self.config.server.port.to_string())));
+                    results.push(RespValue::BulkString(Some(
+                        self.config.server.port.to_string(),
+                    )));
                 }
                 "bind" | "host" => {
                     results.push(RespValue::BulkString(Some("bind".to_string())));
@@ -498,7 +508,9 @@ impl Handler {
                 "*" => {
                     // Wildcard - return all supported parameters
                     results.push(RespValue::BulkString(Some("port".to_string())));
-                    results.push(RespValue::BulkString(Some(self.config.server.port.to_string())));
+                    results.push(RespValue::BulkString(Some(
+                        self.config.server.port.to_string(),
+                    )));
                     results.push(RespValue::BulkString(Some("bind".to_string())));
                     results.push(RespValue::BulkString(Some(self.config.server.host.clone())));
                     results.push(RespValue::BulkString(Some("storage-backend".to_string())));
@@ -539,14 +551,18 @@ impl Handler {
             None
         } else {
             match &args[0] {
-                RespValue::BulkString(Some(ver_str)) => {
-                    match ver_str.parse::<u8>() {
-                        Ok(2) => Some(ProtocolVersion::Resp2),
-                        Ok(3) => Some(ProtocolVersion::Resp3),
-                        Ok(v) => return RespValue::Error(format!("ERR unsupported protocol version: {}", v)),
-                        Err(_) => return RespValue::Error("ERR protocol version must be a number".to_string()),
+                RespValue::BulkString(Some(ver_str)) => match ver_str.parse::<u8>() {
+                    Ok(2) => Some(ProtocolVersion::Resp2),
+                    Ok(3) => Some(ProtocolVersion::Resp3),
+                    Ok(v) => {
+                        return RespValue::Error(format!("ERR unsupported protocol version: {}", v))
                     }
-                }
+                    Err(_) => {
+                        return RespValue::Error(
+                            "ERR protocol version must be a number".to_string(),
+                        )
+                    }
+                },
                 _ => return RespValue::Error("ERR protocol version must be a string".to_string()),
             }
         };
@@ -561,11 +577,26 @@ impl Handler {
             ProtocolVersion::Resp3 => {
                 // RESP3: Return Map
                 RespValue::Map(vec![
-                    (RespValue::BulkString(Some("server".to_string())), RespValue::BulkString(Some("coral-redis".to_string()))),
-                    (RespValue::BulkString(Some("version".to_string())), RespValue::BulkString(Some("0.1.0".to_string()))),
-                    (RespValue::BulkString(Some("proto".to_string())), RespValue::Integer(3)),
-                    (RespValue::BulkString(Some("mode".to_string())), RespValue::BulkString(Some("standalone".to_string()))),
-                    (RespValue::BulkString(Some("role".to_string())), RespValue::BulkString(Some("master".to_string()))),
+                    (
+                        RespValue::BulkString(Some("server".to_string())),
+                        RespValue::BulkString(Some("coral-redis".to_string())),
+                    ),
+                    (
+                        RespValue::BulkString(Some("version".to_string())),
+                        RespValue::BulkString(Some("0.1.0".to_string())),
+                    ),
+                    (
+                        RespValue::BulkString(Some("proto".to_string())),
+                        RespValue::Integer(3),
+                    ),
+                    (
+                        RespValue::BulkString(Some("mode".to_string())),
+                        RespValue::BulkString(Some("standalone".to_string())),
+                    ),
+                    (
+                        RespValue::BulkString(Some("role".to_string())),
+                        RespValue::BulkString(Some("master".to_string())),
+                    ),
                 ])
             }
             ProtocolVersion::Resp2 => {
@@ -602,7 +633,7 @@ mod tests {
     async fn test_ping_no_args() {
         let handler = create_handler();
         let result = handler.handle_ping(&[]).await;
-        
+
         match result {
             RespValue::SimpleString(s) => assert_eq!(s, "PONG"),
             _ => panic!("Expected SimpleString"),
@@ -614,7 +645,7 @@ mod tests {
         let handler = create_handler();
         let args = vec![RespValue::BulkString(Some("hello".to_string()))];
         let result = handler.handle_ping(&args).await;
-        
+
         match result {
             RespValue::BulkString(Some(s)) => assert_eq!(s, "hello"),
             _ => panic!("Expected BulkString"),
@@ -624,23 +655,23 @@ mod tests {
     #[tokio::test]
     async fn test_set_get() {
         let handler = create_handler();
-        
+
         // SET key value
         let set_args = vec![
             RespValue::BulkString(Some("mykey".to_string())),
             RespValue::BulkString(Some("myvalue".to_string())),
         ];
         let set_result = handler.handle_set(&set_args).await;
-        
+
         match set_result {
             RespValue::SimpleString(s) => assert_eq!(s, "OK"),
             _ => panic!("Expected OK"),
         }
-        
+
         // GET key
         let get_args = vec![RespValue::BulkString(Some("mykey".to_string()))];
         let get_result = handler.handle_get(&get_args).await;
-        
+
         match get_result {
             RespValue::BulkString(Some(s)) => assert_eq!(s, "myvalue"),
             _ => panic!("Expected BulkString with value"),
@@ -652,9 +683,9 @@ mod tests {
         let handler = create_handler();
         let args = vec![RespValue::BulkString(Some("nonexistent".to_string()))];
         let result = handler.handle_get(&args).await;
-        
+
         match result {
-            RespValue::BulkString(None) => {},
+            RespValue::BulkString(None) => {}
             _ => panic!("Expected null BulkString"),
         }
     }
@@ -662,27 +693,27 @@ mod tests {
     #[tokio::test]
     async fn test_del() {
         let handler = create_handler();
-        
+
         // Set a key first
         let set_args = vec![
             RespValue::BulkString(Some("key1".to_string())),
             RespValue::BulkString(Some("value1".to_string())),
         ];
         handler.handle_set(&set_args).await;
-        
+
         // Delete the key
         let del_args = vec![RespValue::BulkString(Some("key1".to_string()))];
         let result = handler.handle_del(&del_args).await;
-        
+
         match result {
             RespValue::Integer(i) => assert_eq!(i, 1),
             _ => panic!("Expected Integer 1"),
         }
-        
+
         // Try to delete non-existent key
         let del_args = vec![RespValue::BulkString(Some("nonexistent".to_string()))];
         let result = handler.handle_del(&del_args).await;
-        
+
         match result {
             RespValue::Integer(i) => assert_eq!(i, 0),
             _ => panic!("Expected Integer 0"),
@@ -692,27 +723,27 @@ mod tests {
     #[tokio::test]
     async fn test_exists() {
         let handler = create_handler();
-        
+
         // Set a key
         let set_args = vec![
             RespValue::BulkString(Some("key1".to_string())),
             RespValue::BulkString(Some("value1".to_string())),
         ];
         handler.handle_set(&set_args).await;
-        
+
         // Check if key exists
         let exists_args = vec![RespValue::BulkString(Some("key1".to_string()))];
         let result = handler.handle_exists(&exists_args).await;
-        
+
         match result {
             RespValue::Integer(i) => assert_eq!(i, 1),
             _ => panic!("Expected Integer 1"),
         }
-        
+
         // Check non-existent key
         let exists_args = vec![RespValue::BulkString(Some("nonexistent".to_string()))];
         let result = handler.handle_exists(&exists_args).await;
-        
+
         match result {
             RespValue::Integer(i) => assert_eq!(i, 0),
             _ => panic!("Expected Integer 0"),
@@ -722,20 +753,20 @@ mod tests {
     #[tokio::test]
     async fn test_dbsize() {
         let handler = create_handler();
-        
+
         let result = handler.handle_dbsize().await;
         match result {
             RespValue::Integer(i) => assert_eq!(i, 0),
             _ => panic!("Expected Integer 0"),
         }
-        
+
         // Add some keys
         let set_args = vec![
             RespValue::BulkString(Some("key1".to_string())),
             RespValue::BulkString(Some("value1".to_string())),
         ];
         handler.handle_set(&set_args).await;
-        
+
         let result = handler.handle_dbsize().await;
         match result {
             RespValue::Integer(i) => assert_eq!(i, 1),
@@ -746,20 +777,20 @@ mod tests {
     #[tokio::test]
     async fn test_flushdb() {
         let handler = create_handler();
-        
+
         // Add some keys
         let set_args = vec![
             RespValue::BulkString(Some("key1".to_string())),
             RespValue::BulkString(Some("value1".to_string())),
         ];
         handler.handle_set(&set_args).await;
-        
+
         let result = handler.handle_flushdb().await;
         match result {
             RespValue::SimpleString(s) => assert_eq!(s, "OK"),
             _ => panic!("Expected OK"),
         }
-        
+
         // Verify database is empty
         let dbsize_result = handler.handle_dbsize().await;
         match dbsize_result {
@@ -775,14 +806,14 @@ mod tests {
         // Test wrong number of arguments for SET
         let result = handler.handle_set(&[]).await;
         match result {
-            RespValue::Error(_) => {},
+            RespValue::Error(_) => {}
             _ => panic!("Expected Error"),
         }
 
         // Test wrong number of arguments for GET
         let result = handler.handle_get(&[]).await;
         match result {
-            RespValue::Error(_) => {},
+            RespValue::Error(_) => {}
             _ => panic!("Expected Error"),
         }
     }
@@ -798,7 +829,7 @@ mod tests {
         match result {
             RespValue::Array(Some(items)) => {
                 assert_eq!(items.len(), 10); // 5 key-value pairs
-            },
+            }
             _ => panic!("Expected Array for RESP2 response"),
         }
     }
@@ -815,7 +846,7 @@ mod tests {
         match result {
             RespValue::Array(Some(items)) => {
                 assert_eq!(items.len(), 10); // 5 key-value pairs
-            },
+            }
             _ => panic!("Expected Array for RESP2 response"),
         }
 
@@ -837,15 +868,15 @@ mod tests {
                 assert_eq!(pairs.len(), 5);
 
                 // Verify "proto" field is 3
-                let proto_field = pairs.iter().find(|(k, _)| {
-                    matches!(k, RespValue::BulkString(Some(s)) if s == "proto")
-                });
+                let proto_field = pairs
+                    .iter()
+                    .find(|(k, _)| matches!(k, RespValue::BulkString(Some(s)) if s == "proto"));
                 assert!(proto_field.is_some());
 
                 if let Some((_, RespValue::Integer(proto))) = proto_field {
                     assert_eq!(*proto, 3);
                 }
-            },
+            }
             _ => panic!("Expected Map for RESP3 response"),
         }
 
@@ -865,7 +896,7 @@ mod tests {
         match result {
             RespValue::Error(msg) => {
                 assert!(msg.contains("unsupported protocol version"));
-            },
+            }
             _ => panic!("Expected Error for invalid version"),
         }
 
@@ -890,10 +921,10 @@ mod tests {
                     (RespValue::BulkString(Some(key)), RespValue::BulkString(Some(value))) => {
                         assert_eq!(key, "port");
                         assert_eq!(value, "6379");
-                    },
+                    }
                     _ => panic!("Expected BulkString pairs"),
                 }
-            },
+            }
             _ => panic!("Expected Array response"),
         }
     }
@@ -915,10 +946,10 @@ mod tests {
                     (RespValue::BulkString(Some(key)), RespValue::BulkString(Some(value))) => {
                         assert_eq!(key, "bind");
                         assert_eq!(value, "127.0.0.1");
-                    },
+                    }
                     _ => panic!("Expected BulkString pairs"),
                 }
-            },
+            }
             _ => panic!("Expected Array response"),
         }
     }
@@ -937,7 +968,7 @@ mod tests {
         match result {
             RespValue::Array(Some(items)) => {
                 assert_eq!(items.len(), 4); // 2 key-value pairs
-            },
+            }
             _ => panic!("Expected Array response"),
         }
     }
@@ -959,10 +990,10 @@ mod tests {
                     (RespValue::BulkString(Some(key)), RespValue::BulkString(Some(value))) => {
                         assert_eq!(key, "storage-backend");
                         assert_eq!(value, "memory");
-                    },
+                    }
                     _ => panic!("Expected BulkString pairs"),
                 }
-            },
+            }
             _ => panic!("Expected Array response"),
         }
     }
@@ -981,7 +1012,7 @@ mod tests {
         match result {
             RespValue::Array(Some(items)) => {
                 assert_eq!(items.len(), 0);
-            },
+            }
             _ => panic!("Expected empty Array response"),
         }
     }
@@ -1000,7 +1031,7 @@ mod tests {
         match result {
             RespValue::Array(Some(items)) => {
                 assert!(items.len() >= 10); // At least 5 key-value pairs
-            },
+            }
             _ => panic!("Expected Array response"),
         }
     }
@@ -1012,7 +1043,7 @@ mod tests {
         let result = handler.handle_config(&[]).await;
 
         match result {
-            RespValue::Error(_) => {},
+            RespValue::Error(_) => {}
             _ => panic!("Expected Error for no arguments"),
         }
     }
@@ -1031,7 +1062,7 @@ mod tests {
         match result {
             RespValue::Error(msg) => {
                 assert!(msg.contains("Unknown CONFIG subcommand"));
-            },
+            }
             _ => panic!("Expected Error for unsupported subcommand"),
         }
     }
@@ -1049,7 +1080,7 @@ mod tests {
         match result {
             RespValue::Array(Some(items)) => {
                 assert_eq!(items.len(), 2);
-            },
+            }
             _ => panic!("Expected Array response"),
         }
     }

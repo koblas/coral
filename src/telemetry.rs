@@ -49,7 +49,9 @@ pub async fn init_telemetry() -> Result<TelemetryService, TelemetryError> {
 }
 
 /// Initialize telemetry with custom configuration.
-pub async fn init_telemetry_with_config(config: TelemetryConfig) -> Result<TelemetryService, TelemetryError> {
+pub async fn init_telemetry_with_config(
+    config: TelemetryConfig,
+) -> Result<TelemetryService, TelemetryError> {
     let service = TelemetryService::new(config)?;
 
     crate::metrics::Metrics::init();

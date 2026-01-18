@@ -5,7 +5,9 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "coral-redis")]
 #[command(about = "A Redis-compatible server implemented in Rust")]
-#[command(long_about = "Coral Redis is a high-performance Redis-compatible server with pluggable storage backends")]
+#[command(
+    long_about = "Coral Redis is a high-performance Redis-compatible server with pluggable storage backends"
+)]
 #[command(version)]
 pub struct Cli {
     /// Server host to bind to

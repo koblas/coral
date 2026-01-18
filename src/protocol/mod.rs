@@ -1,12 +1,12 @@
 //! Redis Serialization Protocol (RESP2/RESP3) and inline protocol support.
 
-pub mod resp;
-pub mod inline;
 pub mod detector;
+pub mod inline;
+pub mod resp;
 
-pub use resp::*;
-pub use inline::InlineParser;
 pub use detector::{detect_format, ProtocolFormat};
+pub use inline::InlineParser;
+pub use resp::*;
 
 /// Protocol version for RESP communication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
