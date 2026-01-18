@@ -147,27 +147,32 @@ impl Metrics {
 
     pub fn increment_connections(&self) {
         self.connections_total.add(1, &[]);
+        // NOTE: connections_active is a Counter (monotonic) which cannot be decremented.
+        // For proper active connection tracking, use UpDownCounter<i64> or ObservableGauge.
+        // This is a known limitation - consider upgrading when OTel API allows.
         self.connections_active.add(1, &[]);
-    }
-
-    pub fn decrement_connections(&self) {
-        // Note: OpenTelemetry counters are monotonic, so we can't decrement
-        // For active connections, you'd typically use an UpDownCounter or Gauge
-        // This is a simplified implementation
     }
 
     pub fn record_key_operation(&self, operation: &str, count: u64) {
         match operation {
-            "set" => self.keys_total.add(count, &[KeyValue::new("operation", "set")]),
+            "set" => self
+                .keys_total
+                .add(count, &[KeyValue::new("operation", "set")]),
             "expire" => self.expired_keys_total.add(count, &[]),
             _ => {}
         }
     }
 }
 
-// Timer utility for measuring durations
+/// Timer utility for measuring durations.
 pub struct Timer {
     start: Instant,
+}
+
+impl Default for Timer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Timer {
@@ -180,16 +185,4 @@ impl Timer {
     pub fn elapsed_seconds(&self) -> f64 {
         self.start.elapsed().as_secs_f64()
     }
-}
-
-// Convenience macro for timing operations
-#[macro_export]
-macro_rules! time_operation {
-    ($metrics:expr, $operation:expr, $block:expr) => {{
-        let timer = $crate::metrics::Timer::new();
-        let result = $block;
-        let duration = timer.elapsed_seconds();
-        $metrics.record_operation($operation, duration);
-        result
-    }};
 }

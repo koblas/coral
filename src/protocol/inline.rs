@@ -29,7 +29,7 @@ impl InlineParser {
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Invalid UTF-8 in inline command"))?;
 
         // Parse the command line
-        let parts = Self::parse_command_line(&line)?;
+        let parts = Self::parse_command_line(line)?;
 
         if parts.is_empty() {
             return Ok(None); // Empty command

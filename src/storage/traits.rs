@@ -1,11 +1,14 @@
 use async_trait::async_trait;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// Value stored in backend with optional expiry time.
+///
+/// Uses `SystemTime` for expiry to support persistence across restarts.
 #[derive(Debug, Clone)]
 pub struct StorageValue {
     pub data: String,
-    pub expires_at: Option<std::time::Instant>,
+    /// Absolute expiry time (Unix epoch based, persistable).
+    pub expires_at: Option<SystemTime>,
 }
 
 impl StorageValue {
@@ -21,17 +24,15 @@ impl StorageValue {
     pub fn new_with_expiry(data: String, ttl: Duration) -> Self {
         Self {
             data,
-            expires_at: Some(std::time::Instant::now() + ttl),
+            expires_at: Some(SystemTime::now() + ttl),
         }
     }
 
     /// Check if the value has expired.
     pub fn is_expired(&self) -> bool {
-        if let Some(expires_at) = self.expires_at {
-            std::time::Instant::now() > expires_at
-        } else {
-            false
-        }
+        self.expires_at
+            .map(|expires_at| SystemTime::now() > expires_at)
+            .unwrap_or(false)
     }
 }
 
@@ -42,10 +43,10 @@ impl StorageValue {
 #[async_trait]
 pub trait StorageBackend: Send + Sync {
     /// Store a key-value pair without expiry.
-    async fn set(&self, key: String, value: String) -> Result<(), StorageError>;
+    async fn set(&self, key: &str, value: &str) -> Result<(), StorageError>;
 
     /// Store a key-value pair with TTL expiry.
-    async fn set_with_expiry(&self, key: String, value: String, ttl: Duration) -> Result<(), StorageError>;
+    async fn set_with_expiry(&self, key: &str, value: &str, ttl: Duration) -> Result<(), StorageError>;
 
     /// Retrieve a value by key. Returns None if key doesn't exist or expired.
     async fn get(&self, key: &str) -> Result<Option<String>, StorageError>;
@@ -66,12 +67,18 @@ pub trait StorageBackend: Send + Sync {
 /// Errors that can occur during storage operations.
 #[derive(Debug, thiserror::Error)]
 pub enum StorageError {
-    #[error("Storage operation failed: {0}")]
+    #[error("LMDB error: {0}")]
+    Lmdb(#[from] lmdb::Error),
+
+    #[error("serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+
+    #[error("operation failed: {0}")]
     OperationFailed(String),
-    #[error("Key not found: {0}")]
+
+    #[error("key not found: {0}")]
     KeyNotFound(String),
-    #[error("Connection error: {0}")]
+
+    #[error("connection error: {0}")]
     ConnectionError(String),
-    #[error("Serialization error: {0}")]
-    SerializationError(String),
 }

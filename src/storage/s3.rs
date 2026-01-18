@@ -44,19 +44,18 @@ impl S3Storage {
 #[cfg(feature = "s3-backend")]
 #[async_trait]
 impl StorageBackend for S3Storage {
-    async fn set(&self, key: String, value: String) -> Result<(), StorageError> {
+    async fn set(&self, key: &str, value: &str) -> Result<(), StorageError> {
         let storage_value = S3StorageValue {
-            data: value,
+            data: value.to_owned(),
             expires_at: None,
         };
-        
-        let body = serde_json::to_vec(&storage_value)
-            .map_err(|e| StorageError::SerializationError(e.to_string()))?;
+
+        let body = serde_json::to_vec(&storage_value)?;
 
         self.client
             .put_object()
             .bucket(&self.bucket)
-            .key(self.key_path(&key))
+            .key(self.key_path(key))
             .body(body.into())
             .send()
             .await
@@ -65,24 +64,24 @@ impl StorageBackend for S3Storage {
         Ok(())
     }
 
-    async fn set_with_expiry(&self, key: String, value: String, ttl: Duration) -> Result<(), StorageError> {
+    async fn set_with_expiry(&self, key: &str, value: &str, ttl: Duration) -> Result<(), StorageError> {
         let expires_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .as_millis() as u64 + ttl.as_millis() as u64;
+            .as_millis() as u64
+            + ttl.as_millis() as u64;
 
         let storage_value = S3StorageValue {
-            data: value,
+            data: value.to_owned(),
             expires_at: Some(expires_at),
         };
-        
-        let body = serde_json::to_vec(&storage_value)
-            .map_err(|e| StorageError::SerializationError(e.to_string()))?;
+
+        let body = serde_json::to_vec(&storage_value)?;
 
         self.client
             .put_object()
             .bucket(&self.bucket)
-            .key(self.key_path(&key))
+            .key(self.key_path(key))
             .body(body.into())
             .send()
             .await
@@ -92,7 +91,8 @@ impl StorageBackend for S3Storage {
     }
 
     async fn get(&self, key: &str) -> Result<Option<String>, StorageError> {
-        match self.client
+        match self
+            .client
             .get_object()
             .bucket(&self.bucket)
             .key(self.key_path(key))
@@ -100,12 +100,14 @@ impl StorageBackend for S3Storage {
             .await
         {
             Ok(output) => {
-                let bytes = output.body.collect().await
+                let bytes = output
+                    .body
+                    .collect()
+                    .await
                     .map_err(|e| StorageError::OperationFailed(format!("S3 body read error: {}", e)))?
                     .into_bytes();
-                
-                let storage_value: S3StorageValue = serde_json::from_slice(&bytes)
-                    .map_err(|e| StorageError::SerializationError(e.to_string()))?;
+
+                let storage_value: S3StorageValue = serde_json::from_slice(&bytes)?;
 
                 // Check expiration
                 if let Some(expires_at) = storage_value.expires_at {

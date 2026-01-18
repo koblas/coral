@@ -1,3 +1,4 @@
+use crate::error::ConfigError;
 use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
@@ -8,23 +9,23 @@ use std::path::PathBuf;
 #[command(version)]
 pub struct Cli {
     /// Server host to bind to
-    #[arg(short = 'H', long, default_value = "127.0.0.1")]
-    pub host: String,
+    #[arg(short = 'H', long)]
+    pub host: Option<String>,
 
     /// Server port to bind to
-    #[arg(short, long, default_value = "6379")]
-    pub port: u16,
+    #[arg(short, long)]
+    pub port: Option<u16>,
 
     /// Storage backend to use
-    #[arg(short, long, default_value = "memory")]
-    pub storage: StorageBackend,
+    #[arg(short, long)]
+    pub storage: Option<StorageBackend>,
 
     /// Path for LMDB storage (required when using LMDB backend)
-    #[arg(long, required_if_eq("storage", "lmdb"))]
+    #[arg(long)]
     pub lmdb_path: Option<PathBuf>,
 
     /// S3 bucket name (required when using S3 backend)
-    #[arg(long, required_if_eq("storage", "s3"))]
+    #[arg(long)]
     pub s3_bucket: Option<String>,
 
     /// S3 key prefix (optional when using S3 backend)
@@ -76,53 +77,32 @@ impl Cli {
         <Self as Parser>::parse()
     }
 
-    /// Validate the configuration
-    pub fn validate(&self) -> Result<(), String> {
-        match self.storage {
+    /// Validate the configuration after merging with file/env.
+    pub fn validate_for_storage(&self, storage: &StorageBackend) -> Result<(), ConfigError> {
+        match storage {
             StorageBackend::Lmdb => {
                 if self.lmdb_path.is_none() {
-                    return Err("LMDB path is required when using LMDB backend".to_string());
+                    return Err(ConfigError::MissingField(
+                        "lmdb_path is required when using LMDB backend".to_string(),
+                    ));
                 }
             }
             #[cfg(feature = "s3-backend")]
             StorageBackend::S3 => {
                 if self.s3_bucket.is_none() {
-                    return Err("S3 bucket is required when using S3 backend".to_string());
+                    return Err(ConfigError::MissingField(
+                        "s3_bucket is required when using S3 backend".to_string(),
+                    ));
                 }
             }
-            StorageBackend::Memory => {
-                // Memory backend needs no additional configuration
-            }
+            StorageBackend::Memory => {}
         }
         Ok(())
     }
 
-    /// Convert CLI args to configuration
-    pub fn to_config(&self) -> crate::config::Config {
-        use crate::config::{Config, ServerConfig, StorageConfig};
-
-        let server_config = ServerConfig {
-            host: self.host.clone(),
-            port: self.port,
-        };
-
-        let storage_config = match self.storage {
-            StorageBackend::Memory => StorageConfig::Memory,
-            StorageBackend::Lmdb => StorageConfig::Lmdb {
-                path: self.lmdb_path.clone().expect("LMDB path should be validated"),
-            },
-            #[cfg(feature = "s3-backend")]
-            StorageBackend::S3 => StorageConfig::S3 {
-                bucket: self.s3_bucket.clone().expect("S3 bucket should be validated"),
-                prefix: self.s3_prefix.clone(),
-                region: self.aws_region.clone(),
-            },
-        };
-
-        Config {
-            server: server_config,
-            storage: storage_config,
-        }
+    /// Get effective storage backend (CLI or default).
+    pub fn effective_storage(&self) -> StorageBackend {
+        self.storage.clone().unwrap_or(StorageBackend::Memory)
     }
 
     /// Print example usage for different backends
@@ -133,24 +113,30 @@ impl Cli {
         println!();
 
         println!("  # Start with LMDB backend");
-        println!("  {} --storage lmdb --lmdb-path ./data.lmdb", env!("CARGO_PKG_NAME"));
+        println!(
+            "  {} --storage lmdb --lmdb-path ./data.lmdb",
+            env!("CARGO_PKG_NAME")
+        );
         println!();
 
         #[cfg(feature = "s3-backend")]
         {
             println!("  # Start with S3 backend");
-            println!("  {} --storage s3 --s3-bucket my-bucket --s3-prefix redis/", env!("CARGO_PKG_NAME"));
+            println!(
+                "  {} --storage s3 --s3-bucket my-bucket --s3-prefix redis/",
+                env!("CARGO_PKG_NAME")
+            );
             println!();
         }
-        
+
         println!("  # Custom host and port");
         println!("  {} --host 0.0.0.0 --port 6380", env!("CARGO_PKG_NAME"));
         println!();
-        
+
         println!("  # Load from config file");
         println!("  {} --config config.json", env!("CARGO_PKG_NAME"));
         println!();
-        
+
         println!("  # Verbose logging");
         println!("  {} --verbose", env!("CARGO_PKG_NAME"));
     }

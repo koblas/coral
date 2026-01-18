@@ -1,3 +1,4 @@
+use crate::error::TelemetryError;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProvider;
 use std::time::Duration;
@@ -22,47 +23,38 @@ impl Default for TelemetryConfig {
 ///
 /// Sets up metrics collection with push-based exporter.
 pub struct TelemetryService {
+    #[allow(dead_code)]
     config: TelemetryConfig,
 }
 
 impl TelemetryService {
-    pub fn new(config: TelemetryConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(config: TelemetryConfig) -> Result<Self, TelemetryError> {
         if config.enable_metrics {
-            // Initialize OpenTelemetry with default SDK for push-based metrics
             let provider = MeterProvider::builder().build();
             global::set_meter_provider(provider);
         }
 
-        Ok(Self {
-            config,
-        })
+        Ok(Self { config })
     }
 
-    pub async fn initialize(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if !self.config.enable_metrics {
-            info!("Metrics collection disabled");
-            return Ok(());
-        }
-
+    pub async fn initialize(&self) -> Result<(), TelemetryError> {
         info!("OpenTelemetry metrics initialized for push-based collection");
         Ok(())
     }
 }
 
-// Convenience function to initialize telemetry with default configuration
-pub async fn init_telemetry() -> Result<TelemetryService, Box<dyn std::error::Error + Send + Sync>> {
+/// Initialize telemetry with default configuration.
+pub async fn init_telemetry() -> Result<TelemetryService, TelemetryError> {
     init_telemetry_with_config(TelemetryConfig::default()).await
 }
 
-pub async fn init_telemetry_with_config(config: TelemetryConfig) -> Result<TelemetryService, Box<dyn std::error::Error + Send + Sync>> {
+/// Initialize telemetry with custom configuration.
+pub async fn init_telemetry_with_config(config: TelemetryConfig) -> Result<TelemetryService, TelemetryError> {
     let service = TelemetryService::new(config)?;
-    
-    // Initialize metrics
+
     crate::metrics::Metrics::init();
-    
-    // Initialize telemetry service
     service.initialize().await?;
-    
+
     info!("OpenTelemetry telemetry initialized");
     Ok(service)
 }

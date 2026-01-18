@@ -5,12 +5,15 @@
 
 pub mod cli;
 pub mod config;
+pub mod error;
 pub mod metrics;
 pub mod protocol;
 pub mod server;
 pub mod storage;
 pub mod telemetry;
 
-pub use server::Handler;
+pub use config::{Config, StorageConfig};
+pub use error::{AppError, ConfigError, TelemetryError};
 pub use protocol::{RespParser, RespValue};
+pub use server::Handler;
 pub use storage::{StorageBackend, StorageError, StorageFactory};

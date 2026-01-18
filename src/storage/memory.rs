@@ -28,15 +28,15 @@ impl MemoryStorage {
 
 #[async_trait]
 impl StorageBackend for MemoryStorage {
-    async fn set(&self, key: String, value: String) -> Result<(), StorageError> {
+    async fn set(&self, key: &str, value: &str) -> Result<(), StorageError> {
         let guard = self.data.pin();
-        guard.insert(key, StorageValue::new(value));
+        guard.insert(key.to_owned(), StorageValue::new(value.to_owned()));
         Ok(())
     }
 
-    async fn set_with_expiry(&self, key: String, value: String, ttl: Duration) -> Result<(), StorageError> {
+    async fn set_with_expiry(&self, key: &str, value: &str, ttl: Duration) -> Result<(), StorageError> {
         let guard = self.data.pin();
-        guard.insert(key, StorageValue::new_with_expiry(value, ttl));
+        guard.insert(key.to_owned(), StorageValue::new_with_expiry(value.to_owned(), ttl));
         Ok(())
     }
 
@@ -122,17 +122,20 @@ mod tests {
     #[tokio::test]
     async fn test_memory_basic_set_get() {
         let storage = MemoryStorage::new();
-        storage.set("key1".to_string(), "value1".to_string()).await.unwrap();
-        
-        assert_eq!(storage.get("key1").await.unwrap(), Some("value1".to_string()));
+        storage.set("key1", "value1").await.unwrap();
+
+        assert_eq!(
+            storage.get("key1").await.unwrap(),
+            Some("value1".to_string())
+        );
         assert_eq!(storage.get("nonexistent").await.unwrap(), None);
     }
 
     #[tokio::test]
     async fn test_memory_delete() {
         let storage = MemoryStorage::new();
-        storage.set("key1".to_string(), "value1".to_string()).await.unwrap();
-        
+        storage.set("key1", "value1").await.unwrap();
+
         assert!(storage.delete("key1").await.unwrap());
         assert!(!storage.delete("nonexistent").await.unwrap());
         assert_eq!(storage.get("key1").await.unwrap(), None);
@@ -141,11 +144,11 @@ mod tests {
     #[tokio::test]
     async fn test_memory_exists() {
         let storage = MemoryStorage::new();
-        storage.set("key1".to_string(), "value1".to_string()).await.unwrap();
-        
+        storage.set("key1", "value1").await.unwrap();
+
         assert!(storage.exists("key1").await.unwrap());
         assert!(!storage.exists("nonexistent").await.unwrap());
-        
+
         storage.delete("key1").await.unwrap();
         assert!(!storage.exists("key1").await.unwrap());
     }
@@ -153,17 +156,19 @@ mod tests {
     #[tokio::test]
     async fn test_memory_expiry() {
         let storage = MemoryStorage::new();
-        storage.set_with_expiry(
-            "expiring_key".to_string(),
-            "value".to_string(),
-            Duration::from_millis(50),
-        ).await.unwrap();
-        
-        assert_eq!(storage.get("expiring_key").await.unwrap(), Some("value".to_string()));
+        storage
+            .set_with_expiry("expiring_key", "value", Duration::from_millis(50))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            storage.get("expiring_key").await.unwrap(),
+            Some("value".to_string())
+        );
         assert!(storage.exists("expiring_key").await.unwrap());
-        
+
         thread::sleep(Duration::from_millis(100));
-        
+
         assert_eq!(storage.get("expiring_key").await.unwrap(), None);
         assert!(!storage.exists("expiring_key").await.unwrap());
     }

@@ -4,21 +4,22 @@ use lmdb::{Transaction, WriteFlags};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
+/// Serializable representation of storage values for LMDB persistence.
 #[derive(Serialize, Deserialize)]
 struct SerializableStorageValue {
     data: String,
-    expires_at: Option<u64>, // Unix timestamp in milliseconds
+    /// Unix timestamp in milliseconds for expiry (persistable across restarts).
+    expires_at_ms: Option<u64>,
 }
 
-impl From<StorageValue> for SerializableStorageValue {
-    fn from(value: StorageValue) -> Self {
+impl From<&StorageValue> for SerializableStorageValue {
+    fn from(value: &StorageValue) -> Self {
         Self {
-            data: value.data,
-            expires_at: value.expires_at.map(|instant| {
-                instant.duration_since(std::time::Instant::now()).as_millis() as u64 
-                + std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64
+            data: value.data.clone(),
+            expires_at_ms: value.expires_at.and_then(|t| {
+                t.duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis() as u64)
             }),
         }
     }
@@ -28,17 +29,8 @@ impl From<SerializableStorageValue> for StorageValue {
     fn from(value: SerializableStorageValue) -> Self {
         Self {
             data: value.data,
-            expires_at: value.expires_at.map(|timestamp| {
-                let now_millis = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_millis() as u64;
-                let duration_from_now = if timestamp > now_millis {
-                    Duration::from_millis(timestamp - now_millis)
-                } else {
-                    Duration::from_millis(0) // Already expired
-                };
-                std::time::Instant::now() + duration_from_now
+            expires_at: value.expires_at_ms.map(|ms| {
+                UNIX_EPOCH + Duration::from_millis(ms)
             }),
         }
     }
@@ -69,12 +61,9 @@ impl LmdbStorage {
             .set_flags(lmdb::EnvironmentFlags::NO_SUB_DIR)
             .set_max_dbs(1)
             .set_map_size(map_size)
-            .open(path.as_ref())
-            .map_err(|e| StorageError::ConnectionError(format!("LMDB open error: {}", e)))?;
+            .open(path.as_ref())?;
 
-        let db = env
-            .create_db(None, lmdb::DatabaseFlags::empty())
-            .map_err(|e| StorageError::ConnectionError(format!("LMDB db error: {}", e)))?;
+        let db = env.create_db(None, lmdb::DatabaseFlags::empty())?;
 
         Ok(Self {
             env: Arc::new(env),
@@ -85,51 +74,37 @@ impl LmdbStorage {
 
 #[async_trait]
 impl StorageBackend for LmdbStorage {
-    async fn set(&self, key: String, value: String) -> Result<(), StorageError> {
-        let storage_value = StorageValue::new(value);
-        let serializable = SerializableStorageValue::from(storage_value);
-        let serialized = serde_json::to_vec(&serializable)
-            .map_err(|e| StorageError::SerializationError(e.to_string()))?;
+    async fn set(&self, key: &str, value: &str) -> Result<(), StorageError> {
+        let storage_value = StorageValue::new(value.to_owned());
+        let serializable = SerializableStorageValue::from(&storage_value);
+        let serialized = serde_json::to_vec(&serializable)?;
 
-        let mut txn = self.env.begin_rw_txn()
-            .map_err(|e| StorageError::OperationFailed(format!("Transaction error: {}", e)))?;
-        
-        txn.put(self.db, &key, &serialized, WriteFlags::empty())
-            .map_err(|e| StorageError::OperationFailed(format!("Put error: {}", e)))?;
-        
-        Transaction::commit(txn)
-            .map_err(|e| StorageError::OperationFailed(format!("Commit error: {}", e)))?;
+        let mut txn = self.env.begin_rw_txn()?;
+        txn.put(self.db, &key, &serialized, WriteFlags::empty())?;
+        Transaction::commit(txn)?;
 
         Ok(())
     }
 
-    async fn set_with_expiry(&self, key: String, value: String, ttl: Duration) -> Result<(), StorageError> {
-        let storage_value = StorageValue::new_with_expiry(value, ttl);
-        let serializable = SerializableStorageValue::from(storage_value);
-        let serialized = serde_json::to_vec(&serializable)
-            .map_err(|e| StorageError::SerializationError(e.to_string()))?;
+    async fn set_with_expiry(&self, key: &str, value: &str, ttl: Duration) -> Result<(), StorageError> {
+        let storage_value = StorageValue::new_with_expiry(value.to_owned(), ttl);
+        let serializable = SerializableStorageValue::from(&storage_value);
+        let serialized = serde_json::to_vec(&serializable)?;
 
-        let mut txn = self.env.begin_rw_txn()
-            .map_err(|e| StorageError::OperationFailed(format!("Transaction error: {}", e)))?;
-        
-        txn.put(self.db, &key, &serialized, WriteFlags::empty())
-            .map_err(|e| StorageError::OperationFailed(format!("Put error: {}", e)))?;
-        
-        Transaction::commit(txn)
-            .map_err(|e| StorageError::OperationFailed(format!("Commit error: {}", e)))?;
+        let mut txn = self.env.begin_rw_txn()?;
+        txn.put(self.db, &key, &serialized, WriteFlags::empty())?;
+        Transaction::commit(txn)?;
 
         Ok(())
     }
 
     async fn get(&self, key: &str) -> Result<Option<String>, StorageError> {
         let (data, is_expired) = {
-            let txn = self.env.begin_ro_txn()
-                .map_err(|e| StorageError::OperationFailed(format!("Transaction error: {}", e)))?;
+            let txn = self.env.begin_ro_txn()?;
 
             match Transaction::get(&txn, self.db, &key) {
                 Ok(bytes) => {
-                    let serializable: SerializableStorageValue = serde_json::from_slice(bytes)
-                        .map_err(|e| StorageError::SerializationError(e.to_string()))?;
+                    let serializable: SerializableStorageValue = serde_json::from_slice(bytes)?;
                     let storage_value = StorageValue::from(serializable);
 
                     if storage_value.is_expired() {
@@ -152,44 +127,31 @@ impl StorageBackend for LmdbStorage {
     }
 
     async fn delete(&self, key: &str) -> Result<bool, StorageError> {
-        let mut txn = self.env.begin_rw_txn()
-            .map_err(|e| StorageError::OperationFailed(format!("Transaction error: {}", e)))?;
-        
+        let mut txn = self.env.begin_rw_txn()?;
+
         match txn.del(self.db, &key, None) {
             Ok(()) => {
-                txn.commit()
-                    .map_err(|e| StorageError::OperationFailed(format!("Commit error: {}", e)))?;
+                txn.commit()?;
                 Ok(true)
             }
             Err(lmdb::Error::NotFound) => Ok(false),
-            Err(e) => Err(StorageError::OperationFailed(format!("Delete error: {}", e))),
+            Err(e) => Err(e.into()),
         }
     }
 
     async fn exists(&self, key: &str) -> Result<bool, StorageError> {
-        match self.get(key).await? {
-            Some(_) => Ok(true),
-            None => Ok(false),
-        }
+        Ok(self.get(key).await?.is_some())
     }
 
     async fn keys_count(&self) -> Result<usize, StorageError> {
-        let stat = self.env.stat()
-            .map_err(|e| StorageError::OperationFailed(format!("Stat error: {}", e)))?;
-
+        let stat = self.env.stat()?;
         Ok(stat.entries())
     }
 
     async fn flush(&self) -> Result<(), StorageError> {
-        let mut txn = self.env.begin_rw_txn()
-            .map_err(|e| StorageError::OperationFailed(format!("Transaction error: {}", e)))?;
-        
-        txn.clear_db(self.db)
-            .map_err(|e| StorageError::OperationFailed(format!("Clear error: {}", e)))?;
-        
-        Transaction::commit(txn)
-            .map_err(|e| StorageError::OperationFailed(format!("Commit error: {}", e)))?;
-        
+        let mut txn = self.env.begin_rw_txn()?;
+        txn.clear_db(self.db)?;
+        Transaction::commit(txn)?;
         Ok(())
     }
 }
